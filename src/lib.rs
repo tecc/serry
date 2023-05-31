@@ -5,7 +5,9 @@ mod repr;
 
 #[cfg(feature = "checksum")]
 mod checksum;
-mod alloc;
+
+#[cfg(feature = "derive")]
+pub use serry_derive::*;
 
 pub use write::{SerryWrite, SerryOutput};
 pub use read::{SerryRead, SerryInput};
