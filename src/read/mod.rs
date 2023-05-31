@@ -1,7 +1,7 @@
 use std::io::Read;
 use crate::{SerryError};
-#[cfg(feature = "checksum")]
-use crate::checksum::Checksum;
+
+mod builtin;
 
 pub type ReadResult<T> = Result<T, SerryError>;
 
@@ -11,16 +11,10 @@ pub trait SerryRead: Sized {
 
 pub trait SerryInput: Read + Sized {
     #[cfg(feature = "checksum")]
-    fn with_checksum(&mut self, checksum: Checksum) -> ChecksumSerryInput {
+    fn with_checksum(&mut self, checksum: crate::checksum::Checksum) -> crate::checksum::ChecksumSerryInput {
         todo!()
     }
     fn read_value<T>(&mut self) -> ReadResult<T> where T: SerryRead {
         T::serry_read(self)
     }
-}
-
-
-
-pub struct ChecksumSerryInput {
-
 }

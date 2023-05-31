@@ -27,3 +27,7 @@ impl Checksum {
         Ok(())
     }
 }
+
+pub struct ChecksumSerryInput {
+
+}

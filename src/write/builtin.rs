@@ -17,8 +17,8 @@ impl<T> SerryWrite for [T] where T: SerryWrite {
         Ok(())
     }
 }
-impl<T> SerryWrite for &[T] where T: SerryWrite {
+impl<T> SerryWrite for &T where T: SerryWrite + ?Sized {
     fn serry_write(&self, output: &mut impl SerryOutput) -> WriteResult<()> {
-        <[T]>::serry_write(*self, output)
+        <T>::serry_write(self, output)
     }
 }

@@ -1,7 +1,7 @@
 pub mod write;
 pub mod read;
 
-mod ints;
+mod repr;
 
 #[cfg(feature = "checksum")]
 mod checksum;
