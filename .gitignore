@@ -1,5 +1,10 @@
+# Cargo/Rust
 /target
 Cargo.lock
 
+# Editors
+# - IntelliJ IDEA
 .idea
 *.iml
+# - Visual Studio Code
+.vscode/
