@@ -6,6 +6,8 @@ mod repr;
 #[cfg(feature = "checksum")]
 mod checksum;
 
+use std::{error::Error, fmt::Display};
+
 #[cfg(feature = "derive")]
 pub use serry_derive::*;
 
@@ -36,3 +38,12 @@ impl From<std::io::Error> for SerryError {
         }
     }
 }
+impl Display for SerryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.inner {
+            SerryErrorInner::Io(e) => Display::fmt(e, f),
+            SerryErrorInner::Custom(c) => f.write_str(c.as_str()) 
+        }
+    }
+}
+impl Error for SerryError {}

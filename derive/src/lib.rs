@@ -1,9 +1,23 @@
-use proc_macro2::{TokenStream, Ident, Span};
-use quote::{quote, quote_spanned, ToTokens};
-use syn::{parse_macro_input, DeriveInput, spanned::Spanned, WherePredicate, PredicateType, Data, Fields, Field, Attribute, Lit, LitInt, parenthesized, Token, Error, Path, Type, TypePath, parse_quote, TypeReference};
-use syn::parse::{ParseBuffer, ParseStream};
+use std::cmp::Ordering;
+use std::collections::HashSet;
+
+use proc_macro2::{Span, TokenStream};
+use quote::ToTokens;
+use syn::{Field, LitStr, Variant};
+use syn::parse::{Parse, ParseStream};
+use syn::{
+    parenthesized, parse_macro_input, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput,
+    Error, LitInt, Path, Token, Type, TypePath,
+};
+
+#[macro_use]
+extern crate quote;
+
+mod read;
+mod write;
 
 struct RootVersionInfo {
+    minimum_supported_version: usize,
     current_version: usize,
     version_type: Type,
 }
@@ -14,11 +28,101 @@ struct VersionRange {
     until: Option<usize>,
 }
 
+impl Parse for VersionRange {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let since: LitInt = input.parse()?;
+        let since = since.base10_parse()?;
+
+        let until = if input.peek(Token![..]) {
+            let _ = input.parse::<Token![..]>();
+            let until: LitInt = input.parse()?;
+            Some(until.base10_parse()?)
+        } else {
+            None
+        };
+
+        Ok(Self { since, until })
+    }
+}
+
 struct SerryAttr<'a> {
     version_info: Option<RootVersionInfo>,
     version_range: Option<VersionRange>,
     extrapolate: Option<Extrapolate>,
+    discriminant_value: Option<LitInt>,
+    discriminant_type: Option<TypePath>,
+    field_order: Option<FieldOrder>,
     attr: Option<&'a Attribute>,
+}
+
+impl<'a> SerryAttr<'a> {
+    fn version_with_range_of<'all>(&'all self, field_attr: &'all SerryAttr) -> syn::Result<Option<(&'all RootVersionInfo, &'all VersionRange)>> {
+        Ok(match (&self.version_info, &field_attr.version_range) {
+            (Some(info), Some(range)) => {
+                if let Some(until) = range.until {
+                    if info.current_version > until && field_attr.extrapolate.is_none() {
+                        return Err(Error::new(
+                            field_attr.span(),
+                            "extrapolate is required if version has upper limit",
+                        ));
+                    }
+                }
+                Some((info, range))
+            }
+            (None, Some(_)) => {
+                return Err(Error::new(
+                    field_attr.span(),
+                    "field has version range, but structure does not",
+                ));
+            }
+            (Some(_), None) => {
+                return Err(Error::new(
+                    field_attr.span(),
+                    "structure has versioning, but field does not",
+                ));
+            }
+            (None, None) => None,
+        })
+    }
+}
+
+#[derive(Copy, Clone)]
+enum FieldOrder {
+    Alphabetical,
+    AsSpecified,
+}
+
+impl Default for FieldOrder {
+    fn default() -> Self {
+        FieldOrder::Alphabetical
+    }
+}
+
+impl FieldOrder {
+    fn do_sort(&self) -> bool {
+        match self {
+            Self::AsSpecified => false,
+            _ => true
+        }
+    }
+
+    fn cmp(&self, a: &Field, b: &Field) -> Ordering {
+        match self {
+            Self::AsSpecified => Ordering::Equal,
+            Self::Alphabetical => a.ident.cmp(&b.ident)
+        }
+    }
+}
+
+impl Parse for FieldOrder {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let str: LitStr = input.parse()?;
+        Ok(match str.value().to_lowercase().as_str() {
+            "alphabetical" => Self::Alphabetical,
+            "as_specified" => Self::AsSpecified,
+            _ => return Err(Error::new_spanned(str, "invalid field order - must be either 'alphabetical' or 'as_specified'"))
+        })
+    }
 }
 
 enum Extrapolate {
@@ -33,7 +137,10 @@ impl<'a> ToTokens for SerryAttr<'a> {
     fn to_token_stream(&self) -> TokenStream {
         self.attr.to_token_stream()
     }
-    fn into_token_stream(self) -> TokenStream where Self: Sized {
+    fn into_token_stream(self) -> TokenStream
+        where
+            Self: Sized,
+    {
         self.attr.into_token_stream()
     }
 }
@@ -44,6 +151,9 @@ impl<'a> Default for SerryAttr<'a> {
             version_info: None,
             version_range: None,
             extrapolate: None,
+            discriminant_value: None,
+            discriminant_type: None,
+            field_order: None,
             attr: None,
         }
     }
@@ -53,6 +163,9 @@ impl<'a> Default for SerryAttr<'a> {
 struct SerryAttrFields {
     version: SerryAttrVersionField,
     extrapolate: bool,
+    discriminate_by: bool,
+    discriminator: bool,
+    field_order: bool,
 }
 
 impl Default for SerryAttrFields {
@@ -60,14 +173,18 @@ impl Default for SerryAttrFields {
         Self {
             version: SerryAttrVersionField::None,
             extrapolate: false,
+            discriminate_by: false,
+            discriminator: false,
+            field_order: false,
         }
     }
 }
 
 impl SerryAttrFields {
-    pub fn root() -> Self {
+    pub fn struct_def() -> Self {
         Self {
             version: SerryAttrVersionField::Init,
+            field_order: true,
             ..Self::default()
         }
     }
@@ -78,9 +195,23 @@ impl SerryAttrFields {
             ..Self::default()
         }
     }
+    pub fn enum_def() -> Self {
+        Self {
+            // TODO: Right now enums don't support versioning in favour of being able to version each variant separately.
+            discriminate_by: true,
+            ..Self::default()
+        }
+    }
+    pub fn enum_variant() -> Self {
+        Self {
+            version: SerryAttrVersionField::Init,
+            discriminator: true,
+            ..Self::default()
+        }
+    }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 enum SerryAttrVersionField {
     None,
     Init,
@@ -91,16 +222,17 @@ fn parse_serry_attr(attr: &Attribute, fields: SerryAttrFields) -> Result<SerryAt
     let mut version_info = None;
     let mut version_range = None;
     let mut extrapolate = None;
-    attr.parse_nested_meta(|mut meta| {
-        match &meta.path {
-            path if path.is_ident("version") && version_range.is_none() && version_info.is_none() => match fields.version {
-                SerryAttrVersionField::None => {
-                    return Err(meta.error("unexpected attribute 'version'"));
-                }
+    let mut discriminant_type = None;
+    let mut discriminant_value = None;
+    let mut field_order = None;
+    attr.parse_nested_meta(|meta| match &meta.path {
+        path if fields.version != SerryAttrVersionField::None && version_range.is_none() && version_info.is_none() && path.is_ident("version") => {
+            match fields.version {
+                SerryAttrVersionField::None => panic!("Logical impossibility has occurred"),
                 SerryAttrVersionField::Init => {
                     let version_meta;
                     parenthesized!(version_meta in meta.input);
-                    let value: syn::LitInt = version_meta.parse()?;
+                    let value: VersionRange = version_meta.parse()?;
 
                     let ty = if version_meta.peek(Token![as]) {
                         version_meta.parse::<Token![as]>()?;
@@ -108,339 +240,204 @@ fn parse_serry_attr(attr: &Attribute, fields: SerryAttrFields) -> Result<SerryAt
                     } else {
                         parse_quote!(u8)
                     };
+
+                    let current_version = value.until.unwrap_or(value.since);
+                    let minimum_supported_version = value.since;
+
                     version_info = Some(RootVersionInfo {
-                        current_version: value.base10_parse()?,
+                        minimum_supported_version,
+                        current_version,
                         version_type: ty,
                     });
 
                     Ok(())
                 }
                 SerryAttrVersionField::Range => {
-                    let parse_version_set = |input: ParseStream| {
-                        let since: LitInt = input.parse()?;
-                        let since = since.base10_parse()?;
-
-                        let until = if input.peek(Token![..]) {
-                            let _ = input.parse::<Token![..]>();
-                            let until: LitInt = input.parse()?;
-                            Some(until.base10_parse()?)
-                        } else { None };
-
-                        Ok::<_, Error>(VersionRange {
-                            since,
-                            until,
-                        })
-                    };
                     version_range = Some(if meta.input.peek(Token![=]) {
                         let value = meta.value()?;
-                        parse_version_set(value)?
+                        value.parse()?
                     } else {
                         let version_meta;
                         parenthesized!(version_meta in meta.input);
-                        parse_version_set(&version_meta)?
+                        version_meta.parse()?
                     });
                     Ok(())
                 }
-            },
-            path if fields.extrapolate && path.is_ident("extrapolate") && extrapolate.is_none() => {
-                let value = meta.value()?;
-                extrapolate = Some(Extrapolate::Function(value.parse()?));
-                Ok(())
             }
-            path if fields.extrapolate && path.is_ident("default") && extrapolate.is_none() => {
-                extrapolate = Some(Extrapolate::Default);
-                Ok(())
-            }
-            other => return Err(meta.error(format_args!("unexpected attribute '{}'", other.to_token_stream())))
+        }
+        path if fields.extrapolate && extrapolate.is_none() && path.is_ident("extrapolate") => {
+            let value = meta.value()?;
+            extrapolate = Some(Extrapolate::Function(value.parse()?));
+            Ok(())
+        }
+        path if fields.extrapolate && extrapolate.is_none() && path.is_ident("default") => {
+            extrapolate = Some(Extrapolate::Default);
+            Ok(())
+        }
+        path if fields.discriminate_by && discriminant_type.is_none() && (path.is_ident("discriminate_by") || path.is_ident("repr")) => {
+            let value;
+            parenthesized!(value in meta.input);
+
+            let path: TypePath = value.parse()?;
+            discriminant_type = Some(path);
+
+            Ok(())
+        }
+        path if fields.discriminator && discriminant_value.is_none() && (path.is_ident("discriminant") || path.is_ident("repr")) => {
+            let value = meta.value()?;
+
+            let type_path = value.parse()?;
+            discriminant_value = Some(type_path);
+
+            Ok(())
+        }
+        path if fields.field_order && field_order.is_none() && path.is_ident("field_order") => {
+            let value = meta.value()?;
+            field_order = Some(value.parse()?);
+
+            Ok(())
+        }
+        other => {
+            return Err(meta.error(format_args!(
+                "unexpected attribute '{}'",
+                other.to_token_stream()
+            )));
         }
     })?;
     Ok(SerryAttr {
         version_info,
         version_range,
         extrapolate,
+        discriminant_type,
+        discriminant_value,
+        field_order,
         attr: Some(attr),
     })
 }
 
-fn find_and_parse_serry_attr(attrs: &Vec<Attribute>, fields: SerryAttrFields) -> Result<SerryAttr, Error> {
-    let serry_attr: Vec<_> = attrs.iter().filter(|v| v.path().is_ident("serry")).collect();
+fn find_and_parse_serry_attr(
+    attrs: &Vec<Attribute>,
+    fields: SerryAttrFields,
+) -> Result<SerryAttr, Error> {
+    let serry_attr: Vec<_> = attrs
+        .iter()
+        .filter(|v| v.path().is_ident("serry"))
+        .collect();
     if serry_attr.len() > 1 {
         /*for i in 1..serry_attr.len() {
             let attr = serry_attr[i];
             errors.extend(quote_spanned!(attr.span() => compile_error!("Only one Serry attribute per item")));
         }*/
-        return Err(syn::Error::new(attrs.first().map_or_else(Span::call_site, Attribute::span), "more than one serry attribute"));
+        return Err(Error::new(
+            attrs.first().map_or_else(Span::call_site, Attribute::span),
+            "more than one serry attribute",
+        ));
     }
     let serry_attr = serry_attr.into_iter().nth(0);
-    serry_attr.map(|v| parse_serry_attr(v, fields)).unwrap_or(Ok(SerryAttr::default()))
+    serry_attr
+        .map(|v| parse_serry_attr(v, fields))
+        .unwrap_or(Ok(SerryAttr::default()))
 }
 
-fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
-    let root_attr = find_and_parse_serry_attr(&input.attrs, SerryAttrFields::root())?;
+fn find_and_parse_serry_attr_auto<'a>(
+    attrs: &'a Vec<Attribute>,
+    type_data: &'_ Data,
+) -> Result<SerryAttr<'a>, Error> {
+    find_and_parse_serry_attr(
+        attrs,
+        match type_data {
+            Data::Struct(_) => SerryAttrFields::struct_def(),
+            Data::Enum(_) => SerryAttrFields::enum_def(),
+            _ => {
+                return Err(Error::new(
+                    Span::call_site(),
+                    "cannot derive for types other than structs and enums",
+                ));
+            }
+        },
+    )
+}
 
-    let ident = input.ident.clone();
-    let mut generics = input.generics;
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+struct AnnotatedVariant<'a> {
+    pub variant: &'a Variant,
+    pub attr: SerryAttr<'a>,
+    pub discriminant: usize,
+}
 
-    fn serialise_fields(fields: Fields, root_attr: &SerryAttr) -> TokenStream {
-        match fields {
-            Fields::Unit => quote!().into_token_stream(),
-            Fields::Named(named) => {
-                let mut vec: Vec<(Ident, Field)> = vec![];
-                for field in named.named {
-                    vec.push((
-                        field.ident.clone().unwrap(),
-                        field
+fn enumerate_variants<'a, I>(variants: I) -> Result<Vec<AnnotatedVariant<'a>>, Error>
+    where
+        I: Iterator<Item=&'a Variant>,
+{
+    let mut reserved_nums = HashSet::new();
+
+    let mut preprocessed = Vec::new();
+    for variant in variants {
+        let attr = find_and_parse_serry_attr(&variant.attrs, SerryAttrFields::enum_variant())?;
+
+        let discriminant = match &attr.discriminant_value {
+            Some(value) => {
+                let parsed_value: usize = value.base10_parse()?;
+                if reserved_nums.contains(&parsed_value) {
+                    return Err(Error::new_spanned(
+                        value,
+                        "multiple variants can not have the same value",
                     ));
                 }
-
-                vec.sort_by(|a, b| a.0.cmp(&b.0));
-
-                let vec: Vec<_> = vec.into_iter()
-                    .map(|(ident, field)| {
-                        let field_attr = match find_and_parse_serry_attr(&field.attrs, SerryAttrFields::field()) {
-                            Ok(attr) => attr,
-                            Err(e) => return e.to_compile_error()
-                        };
-
-                        let version = match (&root_attr.version_info, &field_attr.version_range) {
-                            (Some(info), Some(range)) => {
-                                if let Some(until) = range.until {
-                                    if info.current_version > until && field_attr.extrapolate.is_none() {
-                                        return Error::new(field_attr.span(), "extrapolate is required if version has upper limit")
-                                            .to_compile_error();
-                                    }
-                                }
-                                Some((info, range))
-                            }
-                            (None, Some(_)) => return Error::new(field_attr.span(), "field has version range, but structure does not").to_compile_error(),
-                            (Some(_), None) => return Error::new(field_attr.span(), "structure has versioning, but field does not").to_compile_error(),
-                            (None, None) => None
-                        };
-
-                        if let Some((root_info, field_range)) = version {
-                            if field_range.until.map_or(false, |v| v < root_info.current_version) {
-                                return quote_spanned!(field.span() => const _: () = (););
-                            }
-                        }
-                        let ty = TypeReference {
-                            and_token: Token![&](Span::call_site()),
-                            lifetime: None,
-                            mutability: None,
-                            elem: Box::new(field.ty.clone()),
-                        };
-                        quote_spanned! { field.span() =>
-                            output.write_value::<#ty>(&self.#ident)?;
-                        }
-                    })
-                    .collect();
-
-                (quote! {
-                    #(#vec)*
-                }).into()
+                reserved_nums.insert(parsed_value);
+                Some(parsed_value)
             }
-            Fields::Unnamed(unnamed) => {
-                let fields = unnamed.unnamed;
-                todo!()
-            }
-        }
+            None => None,
+        };
+
+        preprocessed.push((variant, attr, discriminant))
     }
 
-    let mut field_serialise = TokenStream::new();
+    let mut vec = Vec::new();
+    let mut next = 0usize;
 
-    if let Some(info) = &root_attr.version_info {
-        let ty = &info.version_type;
-        let version = info.current_version;
-        field_serialise.extend(quote! {
-            output.write_value::<#ty>(#version as #ty);
+    for (variant, attr, discriminant) in preprocessed {
+        let discriminant = if let Some(discriminant) = discriminant {
+            discriminant
+        } else {
+            let value = loop {
+                if reserved_nums.contains(&next) {
+                    next += 1;
+                    continue;
+                }
+                break next;
+            };
+            next += 1;
+            value
+        };
+
+        vec.push(AnnotatedVariant {
+            variant,
+            attr,
+            discriminant,
         })
     }
 
-    field_serialise.extend(match input.data {
-        Data::Struct(model) => {
-            serialise_fields(model.fields, &root_attr)
-        }
-        _ => todo!()
-    });
+    vec.sort_by_key(|v| v.discriminant);
 
-    Ok(quote! {
-        const _: () = {
-            impl #impl_generics ::serry::write::SerryWrite for #ident #ty_generics #where_clause {
-                fn serry_write(&self, output: &mut impl ::serry::write::SerryOutput) -> ::serry::write::WriteResult<()> {
-                    #field_serialise
-                    Ok(())
-                }
-            }
-        };
-    }.into())
+    Ok(vec)
 }
 
 #[proc_macro_derive(SerryWrite, attributes(serry))]
 pub fn derive_write(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item = parse_macro_input!(item as DeriveInput);
-    match derive_write_impl(item) {
+    match write::derive_write_impl(item) {
         Ok(output) => output,
-        Err(e) => e.to_compile_error()
-    }.into()
-}
-
-fn version_ident() -> Ident {
-    Ident::new("__VERSION", Span::call_site())
-}
-
-fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, syn::Error> {
-    let root_attr = find_and_parse_serry_attr(&input.attrs, SerryAttrFields::root())?;
-
-    let version_id = version_ident();
-
-    let ident = input.ident.clone();
-    let mut generics = input.generics;
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-
-    fn deserialise_fields(fields: Fields, root_attr: &SerryAttr) -> TokenStream {
-        fn deserialise_field(field: &Field, output_ident: &Ident, root_attr: &SerryAttr) -> TokenStream {
-            let field_attr = match find_and_parse_serry_attr(&field.attrs, SerryAttrFields::field()) {
-                Ok(attr) => attr,
-                Err(e) => return e.to_compile_error()
-            };
-
-            let version = match (&root_attr.version_info, &field_attr.version_range) {
-                (Some(info), Some(range)) => {
-                    if let Some(until) = range.until {
-                        if info.current_version > until && field_attr.extrapolate.is_none() {
-                            return Error::new(field_attr.span(), "extrapolate is required if version has upper limit")
-                                .to_compile_error();
-                        }
-                    }
-                    Some((info, range))
-                }
-                (None, Some(_)) => return Error::new(field_attr.span(), "field has version range, but structure does not").to_compile_error(),
-                (Some(_), None) => return Error::new(field_attr.span(), "structure has versioning, but field does not").to_compile_error(),
-                (None, None) => None
-            };
-
-            let ty = &field.ty;
-            if let Some((root_info, field_range)) = version {
-                let version_id = version_ident();
-                let version_ty = &root_info.version_type;
-                let since = field_range.since;
-                let until_clause = field_range.until
-                    .map_or(TokenStream::new(), |until| {
-                        quote_spanned!(field_attr.attr.span() => && #version_id <= (#until as #version_ty))
-                    });
-
-                // TODO: Make this use results
-                let extrapolate = field_attr.extrapolate.as_ref()
-                    .map_or(quote!(panic!("Cannot extrapolate field");), |v| {
-                        match v {
-                            Extrapolate::Default => {
-                                quote!(<#ty as ::core::default::Default>::default())
-                            }
-                            Extrapolate::Function(path) => {
-                                quote!(#path())
-                            }
-                        }
-                    });
-                quote_spanned! { field.span() =>
-                    let #output_ident: #ty = if #version_id >= (#since as #version_ty) #until_clause {
-                        input.read_value()?
-                    } else {
-                        #extrapolate
-                    };
-                }
-            } else {
-                quote_spanned! { field.span() =>
-                    let #output_ident: #ty = input.read_value()?;
-                }
-            }
-        }
-        match fields {
-            Fields::Unit => quote!().into_token_stream(),
-            Fields::Named(named) => {
-                let mut vec: Vec<(Ident, Field)> = vec![];
-                for field in named.named {
-                    vec.push((
-                        field.ident.clone().unwrap(),
-                        field
-                    ));
-                }
-
-                vec.sort_by(|a, b| a.0.cmp(&b.0));
-
-                let reading: Vec<_> = vec.iter()
-                    .map(|(ident, field)| deserialise_field(field, ident, root_attr))
-                    .collect();
-
-                let identifiers = vec.iter().map(|v| &v.0);
-
-                (quote! {
-                    #(#reading)*;
-                    Ok(Self {
-                        #(#identifiers),*
-                    })
-                }).into()
-            }
-            Fields::Unnamed(unnamed) => {
-                let fields = unnamed.unnamed;
-
-                let fields: Vec<_> = fields.iter()
-                    .enumerate()
-                    .map(|(i, field)| {
-                        let name = format!("__field_{}", i);
-                        let ident = Ident::new(name.as_str(), Span::call_site());
-                        (deserialise_field(field, &ident, root_attr), ident, field)
-                    })
-                    .collect();
-
-                let reading = fields.iter()
-                    .map(|data| &data.0);
-                let props = fields.iter().map(|v| &v.1);
-
-                quote! {
-                    #(#reading);*
-                    Ok(Self(#(#props),*))
-                }
-            }
-        }
+        Err(e) => e.to_compile_error(),
     }
-
-    let mut field_deserialise = TokenStream::new();
-
-    if let Some(info) = &root_attr.version_info {
-        let ty = &info.version_type;
-        let version = info.current_version;
-        field_deserialise.extend(quote! {
-            let #version_id: #ty = input.read_value()?;
-        })
-    }
-
-    field_deserialise.extend(match input.data {
-        Data::Struct(model) => {
-            deserialise_fields(model.fields, &root_attr)
-        }
-        Data::Enum(model) => {
-            let open = quote!();
-            todo!("Enum discriminators are not yet implemented");
-        }
-        other => todo!()
-    });
-
-    Ok(quote! {
-        const _: () = {
-            impl #impl_generics ::serry::read::SerryRead for #ident #ty_generics #where_clause {
-                fn serry_read(input: &mut impl ::serry::read::SerryInput) -> ::serry::read::ReadResult<Self> {
-                    #field_deserialise
-                }
-            }
-        };
-    }.into())
+        .into()
 }
 
 #[proc_macro_derive(SerryRead, attributes(serry))]
 pub fn derive_read(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item = parse_macro_input!(item as DeriveInput);
-    match derive_read_impl(item) {
+    match read::derive_read_impl(item) {
         Ok(output) => output,
-        Err(e) => e.to_compile_error()
-    }.into()
+        Err(e) => e.to_compile_error(),
+    }
+        .into()
 }

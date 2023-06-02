@@ -10,14 +10,23 @@ struct Something {
 }
 
 #[derive(SerryRead)]
+#[serry(discriminate_by(u16))]
 enum VersionedEnum {
-    #[serry(version)]
+    #[serry(repr = 0)]
     V1 {
-        
+        field: String
     },
+    #[serry(version(2))]
     V2 {
-        
-    }
+        #[serry(version = 1)]
+        v1_field: u32,
+        #[serry(version = 2)]
+        v2_field: String,
+        #[serry(version = 0)]
+        aba: String,
+    },
+    #[serry(version(3))]
+    Other(#[serry(version = 2)] u32)
 }
 
 fn main() {
