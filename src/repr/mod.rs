@@ -1,3 +1,3 @@
-mod nums;
+mod primitives;
 mod alloc;
 mod tuples;

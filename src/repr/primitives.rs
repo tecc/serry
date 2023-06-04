@@ -1,8 +1,4 @@
-use crate::{
-    read::{ReadResult, SerryInput, SerryRead},
-    write::{SerryOutput, SerryWrite, WriteResult},
-    Endian,
-};
+use crate::{read::{ReadResult, SerryInput, SerryRead}, write::{SerryOutput, SerryWrite, WriteResult}, Endian, SerryError};
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
 macro_rules! declare_impl_write {
@@ -54,9 +50,28 @@ macro_rules! declare_impls {
 declare_impls!(none u8; none i8; u16; i16; u32; i32; u64; i64; u128; i128;);
 declare_impls!(f32; f64;);
 
+
+const BOOL_FALSE: u8 = 0;
+const BOOL_TRUE: u8 = 1;
+impl SerryRead for bool {
+    fn serry_read(input: &mut impl SerryInput) -> ReadResult<Self> {
+        let value = input.read_value::<u8>()?;
+        match value {
+            BOOL_FALSE => Ok(false),
+            BOOL_TRUE => Ok(true),
+            _ => Err(SerryError::custom(format!("bool is invalid - {} is not {} (false) nor {} (true)", value, BOOL_FALSE, BOOL_TRUE)))
+        }
+    }
+}
+impl SerryWrite for bool {
+    fn serry_write(&self, output: &mut impl SerryOutput) -> WriteResult<()> {
+        output.write_value(if *self { BOOL_TRUE } else { BOOL_FALSE })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::SerryOutput;
+    use crate::{SerryInput, SerryOutput};
 
 
     macro_rules! range {
@@ -106,5 +121,17 @@ mod tests {
             buf.write_value(i).expect("Could not write");
             assert_eq!(buf.as_slice(), i.to_le_bytes())
         }
+    }
+
+    #[test]
+    fn bools() {
+        let mut buf = Vec::new();
+        buf.write_value(true).expect("Could not write");
+        let value: bool = buf.as_slice().read_value().expect("Could not read");
+        assert!(value);
+        buf.clear();
+        buf.write_value(false).expect("Could not write");
+        let value: bool = buf.as_slice().read_value().expect("Could not read");
+        assert!(!value);
     }
 }
