@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
-use syn::{Field, LitStr, Variant};
+use syn::{Field, Fields, LitStr, Variant};
 use syn::parse::{Parse, ParseStream};
 use syn::{
     parenthesized, parse_macro_input, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput,
@@ -15,6 +15,64 @@ extern crate quote;
 
 mod read;
 mod write;
+
+
+#[proc_macro_derive(SerryWrite, attributes(serry))]
+pub fn derive_write(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let item = parse_macro_input!(item as DeriveInput);
+    match write::derive_write_impl(item) {
+        Ok(output) => output,
+        Err(e) => e.to_compile_error(),
+    }
+        .into()
+}
+
+#[proc_macro_derive(SerryRead, attributes(serry))]
+pub fn derive_read(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let item = parse_macro_input!(item as DeriveInput);
+    match read::derive_read_impl(item) {
+        Ok(output) => output,
+        Err(e) => e.to_compile_error(),
+    }
+        .into()
+}
+
+type ProcessedFields<'a> = Vec<(FieldName, &'a Field)>;
+fn process_fields(fields: &Fields, field_order: FieldOrder) -> Option<ProcessedFields> {
+    let fields: Vec<_> = match fields {
+        Fields::Unit => return None,
+        Fields::Named(named) => named.named.iter().collect(),
+        Fields::Unnamed(unnamed) => unnamed.unnamed.iter().collect(),
+    };
+
+    let mut vec: Vec<(FieldName, &Field)> = vec![];
+    for (i, field) in fields.into_iter().enumerate() {
+        vec.push((match &field.ident {
+            Some(ident) => FieldName::Ident(ident.clone()),
+            None => FieldName::Index(LitInt::new(i.to_string().as_str(), Span::call_site()))
+        }, field));
+    }
+
+    if field_order.do_sort() {
+        vec.sort_by(|a, b| field_order.cmp(a.1, b.1));
+    }
+
+    Some(vec)
+}
+
+fn create_pattern_match<'a, I>(iter: I, unnamed: bool) -> TokenStream where I: Iterator<Item=&'a FieldName> {
+    if unnamed {
+        let names = iter.map(FieldName::output_ident);
+        quote!((#(#names),*))
+    } else {
+        let names = iter.map(|name| {
+            let output = name.output_ident();
+            quote!(#name: #output)
+        });
+        quote!({ #(#names),* })
+    }
+}
+
 
 struct RootVersionInfo {
     minimum_supported_version: usize,
@@ -358,6 +416,10 @@ fn find_and_parse_serry_attr_auto<'a>(
     )
 }
 
+fn default_discriminant_type() -> TypePath {
+    parse_quote!(u16)
+}
+
 struct AnnotatedVariant<'a> {
     pub variant: &'a Variant,
     pub attr: SerryAttr<'a>,
@@ -422,22 +484,24 @@ fn enumerate_variants<'a, I>(variants: I) -> Result<Vec<AnnotatedVariant<'a>>, E
     Ok(vec)
 }
 
-#[proc_macro_derive(SerryWrite, attributes(serry))]
-pub fn derive_write(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let item = parse_macro_input!(item as DeriveInput);
-    match write::derive_write_impl(item) {
-        Ok(output) => output,
-        Err(e) => e.to_compile_error(),
-    }
-        .into()
+enum FieldName {
+    Ident(Ident),
+    Index(LitInt)
 }
-
-#[proc_macro_derive(SerryRead, attributes(serry))]
-pub fn derive_read(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let item = parse_macro_input!(item as DeriveInput);
-    match read::derive_read_impl(item) {
-        Ok(output) => output,
-        Err(e) => e.to_compile_error(),
+impl ToTokens for FieldName {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match &self {
+            Self::Ident(ident) => ident.to_tokens(tokens),
+            Self::Index(index) => index.to_tokens(tokens)
+        }
     }
-        .into()
+}
+impl FieldName {
+    fn output_ident(&self) -> Ident {
+        let name = match &self {
+            Self::Ident(ident) => ident.to_string(),
+            Self::Index(int) => int.to_string()
+        };
+        Ident::new(["__field_", name.as_str()].join("").as_str(), Span::call_site())
+    }
 }

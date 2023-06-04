@@ -9,7 +9,7 @@ struct Something {
     stuff: u32
 }
 
-#[derive(SerryRead)]
+#[derive(SerryRead, SerryWrite)]
 #[serry(discriminate_by(u16))]
 enum VersionedEnum {
     #[serry(repr = 0)]

@@ -1,18 +1,16 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
-use syn::{spanned::Spanned, Data, DeriveInput, Error, Field, Fields, TypePath, parse_quote, Path};
+use syn::{spanned::Spanned, Data, DeriveInput, Error, Field, Fields, parse_quote, Path, LitInt};
 
-use crate::{find_and_parse_serry_attr, Extrapolate, SerryAttr, SerryAttrFields, find_and_parse_serry_attr_auto, enumerate_variants, FieldOrder};
+use crate::{find_and_parse_serry_attr, Extrapolate, SerryAttr, SerryAttrFields, find_and_parse_serry_attr_auto, enumerate_variants, FieldOrder, default_discriminant_type, FieldName, process_fields};
 
 fn version_ident() -> Ident {
-    Ident::new("__VERSION", Span::call_site())
+    Ident::new("__version", Span::call_site())
 }
 
 
 pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
-
-    let version_id = version_ident();
 
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
@@ -20,7 +18,7 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     fn deserialise_fields(fields: &Fields, root_attr: &SerryAttr, field_order: FieldOrder, target_type: &Path) -> TokenStream {
         fn deserialise_field(
             field: &Field,
-            output_ident: &Ident,
+            name: &FieldName,
             root_attr: &SerryAttr,
         ) -> TokenStream {
             let field_attr = match find_and_parse_serry_attr(&field.attrs, SerryAttrFields::field())
@@ -35,6 +33,7 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
             };
 
             let ty = &field.ty;
+            let output_ident = name.output_ident();
             if let Some((root_info, field_range)) = version {
                 let version_id = version_ident();
                 let version_ty = &root_info.version_type;
@@ -46,7 +45,13 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
                 // TODO: Make this use results
                 let extrapolate = field_attr.extrapolate.as_ref().map_or(
-                    quote!(return Err(_Error::custom(format!("Cannot extrapolate field {} from structure with version {}", stringify!(#output_ident), #version_id)))),
+                    quote!(
+                        return Err(_Error::custom(format!(
+                            "Cannot extrapolate field {} from structure with version {}",
+                            stringify!(#name),
+                            #version_id
+                        )))
+                    ),
                     |v| match v {
                         Extrapolate::Default => {
                             quote!(<#ty as ::core::default::Default>::default())
@@ -69,25 +74,27 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                 }
             }
         }
+
+        let vec: Vec<(FieldName, &Field)> = if let Some(vec) = process_fields(fields, field_order) {
+            vec
+        } else {
+            return quote!();
+        };
+
         match fields {
             Fields::Unit => quote!().into_token_stream(),
-            Fields::Named(named) => {
-                let mut vec: Vec<(Ident, &Field)> = vec![];
-                for field in &named.named {
-                    vec.push((field.ident.clone().unwrap(), field));
-                }
-
-                if field_order.do_sort() {
-                    // Avoid sorting if unnecessary because
-                    vec.sort_by(|a, b| field_order.cmp(a.1, b.1));
-                }
-
+            Fields::Named(_) => {
                 let reading: Vec<_> = vec
                     .iter()
-                    .map(|(ident, field)| deserialise_field(field, ident, root_attr))
+                    .map(|(name, field)| deserialise_field(field, &name, root_attr))
                     .collect();
 
-                let identifiers = vec.iter().map(|v| &v.0);
+                let identifiers = vec.iter()
+                    .map(|v| {
+                        let output_ident = v.0.output_ident();
+                        let name = &v.0;
+                        quote!(#name: #output_ident)
+                    });
 
                 (quote! {
                     #(#reading)*;
@@ -97,19 +104,11 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                 })
                 .into()
             }
-            Fields::Unnamed(unnamed) => {
-                let fields: Vec<_> = unnamed.unnamed
-                    .iter()
-                    .enumerate()
-                    .map(|(i, field)| {
-                        let name = format!("__field_{}", i);
-                        let ident = Ident::new(name.as_str(), Span::call_site());
-                        (deserialise_field(field, &ident, root_attr), ident, field)
-                    })
-                    .collect();
-
-                let reading = fields.iter().map(|data| &data.0);
-                let props = fields.iter().map(|v| &v.1);
+            Fields::Unnamed(_) => {
+                let reading = vec.iter()
+                    .map(|data| deserialise_field(data.1, &data.0, root_attr));
+                let props = vec.iter()
+                    .map(|v| v.0.output_ident());
 
                 quote! {
                     #(#reading);*
@@ -172,25 +171,24 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     }
 
     let field_order = root_attr.field_order.unwrap_or_default();
-
     match &input.data {
-        Data::Struct(model) => output.extend(deserialise_fields(&model.fields, &root_attr, field_order, &parse_quote!(Self))),
+        Data::Struct(model) => {
+            output.extend(deserialise_fields(&model.fields, &root_attr, field_order, &parse_quote!(Self)))
+        },
         Data::Enum(model) => {
             let enumerated = enumerate_variants(model.variants.iter())?;
 
-            let discriminant_type = root_attr.discriminant_type.clone().unwrap_or_else(|| {
-                parse_quote!(u16)
-                // We default to u16 since most enums probably won't have more than 65536 variants
-                // (and because 256 variants felt like a bit of low limit)
-            });
+            let discriminant_type = root_attr.discriminant_type.clone().unwrap_or_else(default_discriminant_type);
 
             let enum_variant_ident = Ident::new("__variant", Span::call_site());
             output.extend(quote!(let #enum_variant_ident: #discriminant_type = input.read_value()?;));
             let variants = enumerated.iter().map(|v| {
-                let discriminant = v.discriminant;
+                let discriminant = format!("{}{}", v.discriminant, discriminant_type.to_token_stream());
+                let discriminant = LitInt::new(discriminant.as_str(), Span::call_site());
                 let variant = v.variant;
                 let variant_name = &variant.ident;
                 let mut actual = TokenStream::new();
+                let field_order = v.attr.field_order.unwrap_or(field_order);
                 actual.extend(version_check(&v.attr, VersionStrategy::AnyWithinRange));
                 actual.extend(deserialise_fields(&variant.fields, &v.attr, field_order, &parse_quote!(Self::#variant_name)));
                 quote!{
@@ -212,6 +210,7 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     Ok(quote! {
         const _: () = {
             use ::serry::SerryError as _Error;
+            #[automatically_derived]
             impl #impl_generics ::serry::read::SerryRead for #ident #ty_generics #where_clause {
                 fn serry_read(input: &mut impl ::serry::read::SerryInput) -> ::serry::read::ReadResult<Self> {
                     #output
