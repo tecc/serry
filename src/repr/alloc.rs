@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::{SerryError, SerryInput, SerryOutput, SerryRead, SerryWrite};
+use crate::{SerryError, SerryInput, SerryOutput, SerryRead, SerrySized, SerryWrite};
 use crate::read::ReadResult;
 use crate::write::WriteResult;
 
@@ -20,7 +20,7 @@ impl<T> SerryRead for Vec<T> where T: SerryRead {
         vec.reserve_exact(count);
 
         for _ in 0..count {
-            // Ideally I'd prefer to use indexed accesses, 
+            // Ideally I'd prefer to use indexed accesses,
             // but that's not possible unless we initialise the vector with values first,
             // which requires that T implements Default (or something similar)
             vec.push(T::serry_read(input)?);
@@ -30,8 +30,24 @@ impl<T> SerryRead for Vec<T> where T: SerryRead {
     }
 }
 
+impl<T> SerrySized for Vec<T> where T: SerrySized {
+    fn predict_size(&self) -> usize {
+        let mut size = 0u64.predict_size();
+
+        for el in self {
+            size += el.predict_size();
+        }
+
+        size
+    }
+
+    fn predict_constant_size() -> Option<usize> {
+        None
+    }
+}
+
 // Hashmaps, as documented in the README, are represented as vectors of entries.
-// 
+//
 // Notice that the implementation does not literally pass it to the Vector implementation - for performance's sake,
 // there is a custom implementation.
 impl<K, V> SerryWrite for HashMap<K, V> where K: SerryWrite, V: SerryWrite {
@@ -55,6 +71,22 @@ impl<K, V> SerryRead for HashMap<K, V> where K: SerryRead + Hash + Eq, V: SerryR
         Ok(map)
     }
 }
+impl<K, V> SerrySized for HashMap<K, V> where K: SerrySized, V: SerrySized {
+    fn predict_size(&self) -> usize {
+        let mut size = u64::predict_constant_size_unchecked(); // size of the length prefix
+        match (K::predict_constant_size(), V::predict_constant_size()) {
+            (Some(k), Some(v)) => size += (k + v) * self.len(),
+            _ => for (key, value) in self {
+                size += key.predict_size() + value.predict_size();
+            }
+        }
+        size
+    }
+
+    fn predict_constant_size() -> Option<usize> {
+        None
+    }
+}
 
 // strings
 
@@ -71,9 +103,19 @@ impl SerryRead for String {
     }
 }
 
+impl SerrySized for String {
+    fn predict_size(&self) -> usize {
+        u64::predict_constant_size_unchecked() + (self.as_bytes().len() * u8::predict_constant_size_unchecked())
+    }
+
+    fn predict_constant_size() -> Option<usize> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{mem::size_of, collections::HashMap, hash::Hasher};
+    use std::{mem::size_of, collections::HashMap};
     use byteorder::ByteOrder;
     use crate::{Endian, SerryOutput, SerryInput, SerryRead};
     #[test]
@@ -107,7 +149,7 @@ est laborum."#)
             let mut vec: V = vec![0u128; n as usize];
             buf.write_value(&vec).expect("Could not write vector to buffer");
 
-            let copy = V::serry_read(&mut buf.as_slice()).expect("Could not read vector from buffer"); 
+            let copy = V::serry_read(&mut buf.as_slice()).expect("Could not read vector from buffer");
             assert_eq!(vec, copy);
 
             for i in 0..vec.len() {
@@ -127,7 +169,7 @@ est laborum."#)
         for i in 0..u8::MAX {
             map.insert(i.to_string(), i as u128);
         }
-        
+
         let mut buf = Vec::new();
         buf.write_value(&map).expect("Could not write map to buffer");
 
@@ -140,7 +182,7 @@ est laborum."#)
         entries.sort_by_key(sort_fn); // sort is required or else it fails because the ordering isn't correct
         let mut copy: Vec<_> = (&mut buf.as_slice()).read_value().expect("Could not read list of entries from buffer");
         copy.sort_by_key(sort_fn);
-        
+
         assert_eq!(entries, copy);
     }
 }

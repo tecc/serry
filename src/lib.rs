@@ -1,7 +1,6 @@
 pub mod write;
 pub mod read;
-
-mod repr;
+pub mod repr;
 
 #[cfg(feature = "checksum")]
 mod checksum;
@@ -13,6 +12,7 @@ pub use serry_derive::*;
 
 pub use write::{SerryWrite, SerryOutput};
 pub use read::{SerryRead, SerryInput};
+pub use repr::SerrySized;
 pub use byteorder::LittleEndian as Endian;
 
 #[derive(Debug)]
@@ -42,7 +42,7 @@ impl Display for SerryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.inner {
             SerryErrorInner::Io(e) => Display::fmt(e, f),
-            SerryErrorInner::Custom(c) => f.write_str(c.as_str()) 
+            SerryErrorInner::Custom(c) => f.write_str(c.as_str())
         }
     }
 }

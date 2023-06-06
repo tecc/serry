@@ -1,7 +1,10 @@
 use std::io::Write;
 use sha2::{Sha256, Digest};
 use sha2::digest::FixedOutput;
+use crate::SerryOutput;
 use crate::write::WriteResult;
+
+compile_error!("The 'checksum' feature is not yet complete.");
 
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
@@ -29,5 +32,13 @@ impl Checksum {
 }
 
 pub struct ChecksumSerryInput {
+}
 
+pub struct ChecksumSerryOutput<'a, T: SerryOutput> {
+    underlying: &'a mut T
+}
+impl<'a, T> ChecksumSerryOutput<'a, T> where T: SerryOutput {
+    fn new(underlying: &mut T) {
+        todo!()
+    }
 }

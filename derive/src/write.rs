@@ -55,7 +55,7 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         (quote!(#(#vec)*), Some(processed_fields))
     }
 
-    let mut field_serialise = TokenStream::new();
+    let mut output = TokenStream::new();
 
     if let Some(info) = &root_attr.version_info {
         match &input.data {
@@ -67,7 +67,7 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
         let ty = &info.version_type;
         let version = info.current_version;
-        field_serialise.extend(quote! {
+        output.extend(quote! {
             output.write_value::<#ty>(#version as #ty)?;
         })
     }
@@ -77,7 +77,7 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         Data::Struct(model) => {
             let accessor = |value: &FieldName| { quote!(&self.#value) };
             let serialise = serialise_fields(&model.fields, &root_attr, field_order, accessor);
-            field_serialise.extend(serialise.0);
+            output.extend(serialise.0);
         },
         Data::Enum(model) => {
             let accessor = |v: &FieldName| { v.output_ident() };
@@ -105,7 +105,7 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                     #serialise
                 })
             });
-            field_serialise.extend(quote! {
+            output.extend(quote! {
                 match self {
                     #(#cases),*,
                     _ => panic!("Unexpected enum variant")
@@ -121,7 +121,7 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
             #[automatically_derived]
             impl #impl_generics ::serry::write::SerryWrite for #ident #ty_generics #where_clause {
                 fn serry_write(&self, output: &mut impl ::serry::write::SerryOutput) -> ::serry::write::WriteResult<()> {
-                    #field_serialise
+                    #output
                     Ok(())
                 }
             }

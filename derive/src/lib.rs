@@ -15,6 +15,7 @@ extern crate quote;
 
 mod read;
 mod write;
+mod sized;
 
 
 #[proc_macro_derive(SerryWrite, attributes(serry))]
@@ -31,6 +32,16 @@ pub fn derive_write(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 pub fn derive_read(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item = parse_macro_input!(item as DeriveInput);
     match read::derive_read_impl(item) {
+        Ok(output) => output,
+        Err(e) => e.to_compile_error(),
+    }
+        .into()
+}
+
+#[proc_macro_derive(SerrySized, attributes(serry))]
+pub fn derive_sized(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let item = parse_macro_input!(item as DeriveInput);
+    match sized::derive_sized_impl(item) {
         Ok(output) => output,
         Err(e) => e.to_compile_error(),
     }

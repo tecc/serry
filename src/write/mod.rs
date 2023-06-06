@@ -11,8 +11,9 @@ pub trait SerryWrite {
 }
 
 pub trait SerryOutput: Write + Sized {
-    fn with_checksum(&mut self) -> ChecksumSerryOutput<Self> {
-        ChecksumSerryOutput::new(self)
+    #[cfg(feature = "checksum")]
+    fn with_checksum(&mut self) -> crate::checksum::ChecksumSerryOutput<Self> {
+        crate::checksum::ChecksumSerryOutput::new(self)
     }
 
     fn write_value<T>(&mut self, value: T) -> WriteResult<()> where T: SerryWrite {
@@ -27,31 +28,3 @@ pub trait SerryOutput: Write + Sized {
         Ok(())
     }
 }
-
-pub struct ChecksumSerryOutput<'a, T: ?Sized> {
-    output: &'a T,
-    buf: Vec<u8>,
-}
-
-impl<'a, T: ?Sized> ChecksumSerryOutput<'a, T> {
-    fn new(output: &'a mut T) -> Self {
-        Self {
-            output,
-            buf: Vec::new(),
-        }
-    }
-
-    fn end(self) {}
-}
-
-impl<'a, T> Write for ChecksumSerryOutput<'a, T> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.buf.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.buf.flush()
-    }
-}
-
-impl<'a, T> SerryOutput for ChecksumSerryOutput<'a, T> {}

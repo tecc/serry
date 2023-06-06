@@ -1,6 +1,6 @@
-use serry::{SerryRead, SerryWrite};
+use serry::{SerryRead, SerryWrite, SerrySized};
 
-#[derive(SerryRead, SerryWrite)]
+#[derive(SerryRead, SerryWrite, SerrySized)]
 #[serry(version(3))]
 struct Something {
     #[serry(version = 0)]
@@ -9,7 +9,7 @@ struct Something {
     stuff: u32
 }
 
-#[derive(SerryRead, SerryWrite)]
+#[derive(SerryRead, SerryWrite, SerrySized)]
 #[serry(discriminate_by(u16))]
 enum VersionedEnum {
     #[serry(repr = 0)]

@@ -1,4 +1,9 @@
-use crate::{read::{ReadResult, SerryInput, SerryRead}, write::{SerryOutput, SerryWrite, WriteResult}, Endian, SerryError};
+use crate::{
+    read::{ReadResult, SerryInput, SerryRead},
+    write::{SerryOutput, SerryWrite, WriteResult},
+    repr::{SerrySized},
+    Endian, SerryError,
+};
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
 macro_rules! declare_impl_write {
@@ -33,6 +38,21 @@ macro_rules! declare_impl {
                     declare_impl_read!(input => $kind [<read_ $typename>])
                 }
             }
+
+            impl SerrySized for $typename {
+                #[inline]
+                fn predict_size(&self) -> usize {
+                    Self::predict_constant_size_unchecked()
+                }
+                #[inline]
+                fn predict_constant_size_unchecked() -> usize {
+                    std::mem::size_of::<$typename>()
+                }
+                #[inline]
+                fn predict_constant_size() -> Option<usize> {
+                    Some(Self::predict_constant_size_unchecked())
+                }
+            }
         );
     }
 }
@@ -50,9 +70,9 @@ macro_rules! declare_impls {
 declare_impls!(none u8; none i8; u16; i16; u32; i32; u64; i64; u128; i128;);
 declare_impls!(f32; f64;);
 
-
 const BOOL_FALSE: u8 = 0;
 const BOOL_TRUE: u8 = 1;
+
 impl SerryRead for bool {
     fn serry_read(input: &mut impl SerryInput) -> ReadResult<Self> {
         let value = input.read_value::<u8>()?;
@@ -63,9 +83,74 @@ impl SerryRead for bool {
         }
     }
 }
+
 impl SerryWrite for bool {
     fn serry_write(&self, output: &mut impl SerryOutput) -> WriteResult<()> {
         output.write_value(if *self { BOOL_TRUE } else { BOOL_FALSE })
+    }
+}
+impl SerrySized for bool {
+    #[inline]
+    fn predict_size(&self) -> usize {
+        Self::predict_constant_size_unchecked()
+    }
+    #[inline]
+    fn predict_constant_size() -> Option<usize> {
+        Some(Self::predict_constant_size_unchecked())
+    }
+    #[inline]
+    fn predict_constant_size_unchecked() -> usize {
+        std::mem::size_of::<u8>()
+    }
+}
+
+impl<T> SerryWrite for [T] where T: SerryWrite {
+    fn serry_write(&self, output: &mut impl SerryOutput) -> WriteResult<()> {
+        let length = self.len();
+        output.write_value(length as u64)?;
+        for item in self {
+            item.serry_write(output)?;
+        }
+        Ok(())
+    }
+}
+impl<T> SerrySized for [T] where T: SerrySized {
+    fn predict_size(&self) -> usize {
+        let mut size = u64::predict_constant_size().unwrap();
+        match T::predict_constant_size() {
+            Some(v) => size += self.len() * v,
+            None => {
+                for value in self {
+                    size += value.predict_size();
+                }
+            }
+        }
+        size
+    }
+
+    fn predict_constant_size() -> Option<usize> {
+        None
+    }
+}
+impl<T, const L: usize> SerrySized for [T; L] where T: SerrySized {
+    fn predict_size(&self) -> usize {
+        match Self::predict_constant_size() {
+            Some(v) => v,
+            None => {
+                let mut size = u64::predict_constant_size_unchecked();
+                for t in self {
+                    size += t.predict_size();
+                }
+                size
+            }
+        }
+    }
+
+    fn predict_constant_size() -> Option<usize> {
+        match T::predict_constant_size() {
+            Some(v) => Some(u64::predict_constant_size_unchecked() + (v * L)),
+            None => None
+        }
     }
 }
 
