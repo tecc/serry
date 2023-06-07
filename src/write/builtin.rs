@@ -1,8 +1,12 @@
-
+use std::fs::File;
+use std::net::TcpStream;
 use super::{SerryOutput, SerryWrite, WriteResult};
 
 // output impls
 impl SerryOutput for Vec<u8> {}
+impl SerryOutput for File {}
+impl SerryOutput for TcpStream {}
+
 // impl<T: SerryOutput> SerryOutput for &mut T {}
 
 impl<T> SerryWrite for &T where T: SerryWrite + ?Sized {
