@@ -40,7 +40,7 @@ Note that Serry makes _no_ guarantee of the order of the elements. If a predicta
 ### Strings
 
 Strings are effectively represented as Vectors of `u8`. They are encoded as UTF-8.
-
+The only difference between using Vec<u8> and Strings is that `String` guarantees a valid UTF-8 string.
 
 ## Licence
 
