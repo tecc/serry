@@ -2,16 +2,23 @@
 members = ["derive"]
 resolver = "2"
 
+[workspace.package]
+authors = ["tecc"]
+version = "0.1.0"
+license = "Apache-2.0"
+repository = "https://github.com/tecc/serry"
+edition = "2021"
+
 [package]
 name = "serry"
 description = """
 Serry - the unstructured Serde.
 """
-version = "0.1.0"
-license = "Apache-2.0"
-repository = "https://github.com/tecc/serry"
-authors = ["tecc"]
-edition = "2021"
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+edition.workspace = true
 
 [dependencies]
 byteorder = "1.4.3"
