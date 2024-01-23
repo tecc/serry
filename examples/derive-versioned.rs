@@ -1,4 +1,4 @@
-use serry::{SerryRead, SerryWrite, SerrySized};
+use serry::{SerryRead, SerrySized, SerryWrite};
 
 #[derive(SerryRead, SerryWrite, SerrySized)]
 #[serry(version(3))]
@@ -6,16 +6,14 @@ struct Something {
     #[serry(version = 0)]
     name: String,
     #[serry(version = 1..2, default)]
-    stuff: u32
+    stuff: u32,
 }
 
 #[derive(SerryRead, SerryWrite, SerrySized)]
 #[serry(discriminate_by(u16))]
 enum VersionedEnum {
     #[serry(repr = 0)]
-    V1 {
-        field: String
-    },
+    V1 { field: String },
     #[serry(version(2))]
     V2 {
         #[serry(version = 1)]
@@ -26,9 +24,7 @@ enum VersionedEnum {
         aba: String,
     },
     #[serry(version(3))]
-    Other(#[serry(version = 2)] u32)
+    Other(#[serry(version = 2)] u32),
 }
 
-fn main() {
-
-}
+fn main() {}

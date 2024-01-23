@@ -1,6 +1,5 @@
+use crate::SerryError;
 use std::io::Write;
-use byteorder::{WriteBytesExt};
-use crate::{Endian, SerryError};
 
 mod builtin;
 
@@ -16,15 +15,18 @@ pub trait SerryOutput: Write + Sized {
         crate::checksum::ChecksumSerryOutput::new(self)
     }
 
-    fn write_value<T>(&mut self, value: T) -> WriteResult<()> where T: SerryWrite {
+    fn write_value<T>(&mut self, value: T) -> WriteResult<()>
+    where
+        T: SerryWrite,
+    {
         value.serry_write(self)
     }
 
-    fn serry_str(&mut self, s: impl AsRef<str>) -> WriteResult<()> {
+    /*fn serry_str(&mut self, s: impl AsRef<str>) -> WriteResult<()> {
         let s = s.as_ref();
         let bytes = s.as_bytes();
         self.write_u64::<Endian>(bytes.len() as u64)?;
         self.write_all(bytes)?;
         Ok(())
-    }
+    }*/
 }

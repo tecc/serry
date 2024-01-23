@@ -1,6 +1,9 @@
 use impl_trait_for_tuples::impl_for_tuples;
 
-use crate::{SerryOutput, write::WriteResult, SerryWrite, SerryRead, read::ReadResult, SerryInput, SerrySized};
+use crate::{
+    read::ReadResult, write::WriteResult, SerryInput, SerryOutput, SerryRead, SerrySized,
+    SerryWrite,
+};
 
 #[impl_for_tuples(2)]
 #[tuple_types_custom_trait_bound(SerryWrite)]

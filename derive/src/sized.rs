@@ -1,8 +1,12 @@
-use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro2::{Ident, TokenStream};
 use quote::ToTokens;
-use syn::{spanned::Spanned, Data, DeriveInput, Error, Fields, Token, TypeReference, parse_quote};
+use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Fields};
 
-use crate::{enumerate_variants, find_and_parse_serry_attr, SerryAttr, SerryAttrFields, find_and_parse_serry_attr_auto, FieldOrder, default_discriminant_type, FieldName, process_fields, create_pattern_match, ProcessedFields};
+use crate::{
+    create_pattern_match, default_discriminant_type, enumerate_variants, find_and_parse_serry_attr,
+    find_and_parse_serry_attr_auto, process_fields, FieldName, FieldOrder, ProcessedFields,
+    SerryAttr, SerryAttrFields,
+};
 
 fn get_size_ident() -> Ident {
     return parse_quote!(__size);
@@ -19,7 +23,7 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     struct Predict {
         on_self: TokenStream,
         constant: TokenStream,
-        constant_unchecked: TokenStream
+        constant_unchecked: TokenStream,
     }
     impl Predict {
         fn all(v: impl ToTokens) -> Self {
@@ -27,7 +31,7 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
             Self {
                 on_self: stream.clone(),
                 constant: stream.clone(),
-                constant_unchecked: stream
+                constant_unchecked: stream,
             }
         }
         fn one(v: impl ToTokens) -> Self {
@@ -38,11 +42,18 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         }
     }
 
-    fn sized_fields<'a, T>(fields: &'a Fields, root_attr: &SerryAttr, field_order: FieldOrder, accessor: impl Fn(&FieldName) -> T)
-                           -> (Predict, Option<ProcessedFields<'a>>) where T: ToTokens {
+    fn sized_fields<'a, T>(
+        fields: &'a Fields,
+        root_attr: &SerryAttr,
+        field_order: FieldOrder,
+        accessor: impl Fn(&FieldName) -> T,
+    ) -> (Predict, Option<ProcessedFields<'a>>)
+    where
+        T: ToTokens,
+    {
         let processed_fields = match process_fields(fields, field_order) {
             Some(vec) => vec,
-            None => return (Predict::default(), None)
+            None => return (Predict::default(), None),
         };
         let size_ident = get_size_ident();
 
@@ -96,18 +107,25 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
             constant_unchecked.extend(i.constant_unchecked);
         }
 
-        (Predict {
-            on_self,
-            constant,
-            constant_unchecked,
-        }, Some(processed_fields))
+        (
+            Predict {
+                on_self,
+                constant,
+                constant_unchecked,
+            },
+            Some(processed_fields),
+        )
     }
 
     let mut predict_on_self = TokenStream::new();
     let mut predict_constant = TokenStream::new();
     let mut predict_constant_unchecked = TokenStream::new();
 
-    fn add_version(attr: &SerryAttr, output: &mut [&mut TokenStream], input: Option<&DeriveInput>) -> Result<(), Error> {
+    fn add_version(
+        attr: &SerryAttr,
+        output: &mut [&mut TokenStream],
+        input: Option<&DeriveInput>,
+    ) -> Result<(), Error> {
         if let Some(info) = &attr.version_info {
             if let Some(input) = input {
                 match input.data {
@@ -129,12 +147,20 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         Ok(())
     }
 
-    add_version(&root_attr, &mut [&mut predict_on_self, &mut predict_constant, &mut predict_constant_unchecked], Some(&input))?;
+    add_version(
+        &root_attr,
+        &mut [
+            &mut predict_on_self,
+            &mut predict_constant,
+            &mut predict_constant_unchecked,
+        ],
+        Some(&input),
+    )?;
 
     let field_order = root_attr.field_order.unwrap_or_default();
     match &input.data {
         Data::Struct(model) => {
-            let accessor = |value: &FieldName| { quote!(&self.#value) };
+            let accessor = |value: &FieldName| quote!(&self.#value);
             let (predict, _) = sized_fields(&model.fields, &root_attr, field_order, accessor);
             predict_on_self.extend(predict.on_self);
 
@@ -156,14 +182,18 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
             };
         }
         Data::Enum(model) => {
-            let accessor = |v: &FieldName| { v.output_ident() };
+            let accessor = |v: &FieldName| v.output_ident();
             let variants = enumerate_variants(model.variants.iter())?;
-            let discriminant_ty = root_attr.discriminant_type.clone().unwrap_or_else(default_discriminant_type);
+            let discriminant_ty = root_attr
+                .discriminant_type
+                .clone()
+                .unwrap_or_else(default_discriminant_type);
             let cases = variants.iter().map(|var| {
                 let variant_ident = &var.variant.ident;
                 // let discriminant = var.discriminant;
                 let field_order = var.attr.field_order.unwrap_or(field_order);
-                let (predict, fields) = sized_fields(&var.variant.fields, &var.attr, field_order, accessor);
+                let (predict, fields) =
+                    sized_fields(&var.variant.fields, &var.attr, field_order, accessor);
 
                 let params = if let Some(fields) = fields {
                     let unnamed = match var.variant.fields {
@@ -175,7 +205,6 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                 } else {
                     quote!()
                 };
-
 
                 let mut predict_size = TokenStream::new();
                 add_version(&var.attr, &mut [&mut predict_size], None).unwrap();
@@ -198,7 +227,12 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
             predict_constant_unchecked.extend(quote! { panic!("Enums cannot have a constant size determined automatically (yet)") })
         }
         // Data::Union(_) => return Err(Error::new_spanned(input, "unions are not supported")),
-        _ => return Err(Error::new_spanned(input, "unsupported type - you can only derive SerryWrite for structs and enums")),
+        _ => {
+            return Err(Error::new_spanned(
+                input,
+                "unsupported type - you can only derive SerryWrite for structs and enums",
+            ))
+        }
     }
 
     Ok(quote! {
@@ -221,5 +255,6 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                 }
             }
         };
-    }.into())
+    }
+    .into())
 }

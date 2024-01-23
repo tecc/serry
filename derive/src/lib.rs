@@ -3,20 +3,19 @@ use std::collections::HashSet;
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
-use syn::{Field, Fields, LitStr, Variant};
 use syn::parse::{Parse, ParseStream};
 use syn::{
     parenthesized, parse_macro_input, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput,
     Error, LitInt, Path, Token, Type, TypePath,
 };
+use syn::{Field, Fields, LitStr, Variant};
 
 #[macro_use]
 extern crate quote;
 
 mod read;
-mod write;
 mod sized;
-
+mod write;
 
 #[proc_macro_derive(SerryWrite, attributes(serry))]
 pub fn derive_write(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -25,7 +24,7 @@ pub fn derive_write(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
         Ok(output) => output,
         Err(e) => e.to_compile_error(),
     }
-        .into()
+    .into()
 }
 
 #[proc_macro_derive(SerryRead, attributes(serry))]
@@ -35,7 +34,7 @@ pub fn derive_read(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
         Ok(output) => output,
         Err(e) => e.to_compile_error(),
     }
-        .into()
+    .into()
 }
 
 #[proc_macro_derive(SerrySized, attributes(serry))]
@@ -45,7 +44,7 @@ pub fn derive_sized(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
         Ok(output) => output,
         Err(e) => e.to_compile_error(),
     }
-        .into()
+    .into()
 }
 
 type ProcessedFields<'a> = Vec<(FieldName, &'a Field)>;
@@ -58,10 +57,13 @@ fn process_fields(fields: &Fields, field_order: FieldOrder) -> Option<ProcessedF
 
     let mut vec: Vec<(FieldName, &Field)> = vec![];
     for (i, field) in fields.into_iter().enumerate() {
-        vec.push((match &field.ident {
-            Some(ident) => FieldName::Ident(ident.clone()),
-            None => FieldName::Index(LitInt::new(i.to_string().as_str(), Span::call_site()))
-        }, field));
+        vec.push((
+            match &field.ident {
+                Some(ident) => FieldName::Ident(ident.clone()),
+                None => FieldName::Index(LitInt::new(i.to_string().as_str(), Span::call_site())),
+            },
+            field,
+        ));
     }
 
     if field_order.do_sort() {
@@ -71,7 +73,10 @@ fn process_fields(fields: &Fields, field_order: FieldOrder) -> Option<ProcessedF
     Some(vec)
 }
 
-fn create_pattern_match<'a, I>(iter: I, unnamed: bool) -> TokenStream where I: Iterator<Item=&'a FieldName> {
+fn create_pattern_match<'a, I>(iter: I, unnamed: bool) -> TokenStream
+where
+    I: Iterator<Item = &'a FieldName>,
+{
     if unnamed {
         let names = iter.map(FieldName::output_ident);
         quote!((#(#names),*))
@@ -83,7 +88,6 @@ fn create_pattern_match<'a, I>(iter: I, unnamed: bool) -> TokenStream where I: I
         quote!({ #(#names),* })
     }
 }
-
 
 struct RootVersionInfo {
     minimum_supported_version: usize,
@@ -125,7 +129,10 @@ struct SerryAttr<'a> {
 }
 
 impl<'a> SerryAttr<'a> {
-    fn version_with_range_of<'all>(&'all self, field_attr: &'all SerryAttr) -> syn::Result<Option<(&'all RootVersionInfo, &'all VersionRange)>> {
+    fn version_with_range_of<'all>(
+        &'all self,
+        field_attr: &'all SerryAttr,
+    ) -> syn::Result<Option<(&'all RootVersionInfo, &'all VersionRange)>> {
         Ok(match (&self.version_info, &field_attr.version_range) {
             (Some(info), Some(range)) => {
                 if let Some(until) = range.until {
@@ -171,14 +178,14 @@ impl FieldOrder {
     fn do_sort(&self) -> bool {
         match self {
             Self::AsSpecified => false,
-            _ => true
+            _ => true,
         }
     }
 
     fn cmp(&self, a: &Field, b: &Field) -> Ordering {
         match self {
             Self::AsSpecified => Ordering::Equal,
-            Self::Alphabetical => a.ident.cmp(&b.ident)
+            Self::Alphabetical => a.ident.cmp(&b.ident),
         }
     }
 }
@@ -189,7 +196,12 @@ impl Parse for FieldOrder {
         Ok(match str.value().to_lowercase().as_str() {
             "alphabetical" => Self::Alphabetical,
             "as_specified" => Self::AsSpecified,
-            _ => return Err(Error::new_spanned(str, "invalid field order - must be either 'alphabetical' or 'as_specified'"))
+            _ => {
+                return Err(Error::new_spanned(
+                    str,
+                    "invalid field order - must be either 'alphabetical' or 'as_specified'",
+                ))
+            }
         })
     }
 }
@@ -207,8 +219,8 @@ impl<'a> ToTokens for SerryAttr<'a> {
         self.attr.to_token_stream()
     }
     fn into_token_stream(self) -> TokenStream
-        where
-            Self: Sized,
+    where
+        Self: Sized,
     {
         self.attr.into_token_stream()
     }
@@ -295,7 +307,11 @@ fn parse_serry_attr(attr: &Attribute, fields: SerryAttrFields) -> Result<SerryAt
     let mut discriminant_value = None;
     let mut field_order = None;
     attr.parse_nested_meta(|meta| match &meta.path {
-        path if fields.version != SerryAttrVersionField::None && version_range.is_none() && version_info.is_none() && path.is_ident("version") => {
+        path if fields.version != SerryAttrVersionField::None
+            && version_range.is_none()
+            && version_info.is_none()
+            && path.is_ident("version") =>
+        {
             match fields.version {
                 SerryAttrVersionField::None => panic!("Logical impossibility has occurred"),
                 SerryAttrVersionField::Init => {
@@ -343,7 +359,10 @@ fn parse_serry_attr(attr: &Attribute, fields: SerryAttrFields) -> Result<SerryAt
             extrapolate = Some(Extrapolate::Default);
             Ok(())
         }
-        path if fields.discriminate_by && discriminant_type.is_none() && (path.is_ident("discriminate_by") || path.is_ident("repr")) => {
+        path if fields.discriminate_by
+            && discriminant_type.is_none()
+            && (path.is_ident("discriminate_by") || path.is_ident("repr")) =>
+        {
             let value;
             parenthesized!(value in meta.input);
 
@@ -352,7 +371,10 @@ fn parse_serry_attr(attr: &Attribute, fields: SerryAttrFields) -> Result<SerryAt
 
             Ok(())
         }
-        path if fields.discriminator && discriminant_value.is_none() && (path.is_ident("discriminant") || path.is_ident("repr")) => {
+        path if fields.discriminator
+            && discriminant_value.is_none()
+            && (path.is_ident("discriminant") || path.is_ident("repr")) =>
+        {
             let value = meta.value()?;
 
             let type_path = value.parse()?;
@@ -438,8 +460,8 @@ struct AnnotatedVariant<'a> {
 }
 
 fn enumerate_variants<'a, I>(variants: I) -> Result<Vec<AnnotatedVariant<'a>>, Error>
-    where
-        I: Iterator<Item=&'a Variant>,
+where
+    I: Iterator<Item = &'a Variant>,
 {
     let mut reserved_nums = HashSet::new();
 
@@ -497,13 +519,13 @@ fn enumerate_variants<'a, I>(variants: I) -> Result<Vec<AnnotatedVariant<'a>>, E
 
 enum FieldName {
     Ident(Ident),
-    Index(LitInt)
+    Index(LitInt),
 }
 impl ToTokens for FieldName {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match &self {
             Self::Ident(ident) => ident.to_tokens(tokens),
-            Self::Index(index) => index.to_tokens(tokens)
+            Self::Index(index) => index.to_tokens(tokens),
         }
     }
 }
@@ -511,8 +533,11 @@ impl FieldName {
     fn output_ident(&self) -> Ident {
         let name = match &self {
             Self::Ident(ident) => ident.to_string(),
-            Self::Index(int) => int.to_string()
+            Self::Index(int) => int.to_string(),
         };
-        Ident::new(["__field_", name.as_str()].join("").as_str(), Span::call_site())
+        Ident::new(
+            ["__field_", name.as_str()].join("").as_str(),
+            Span::call_site(),
+        )
     }
 }

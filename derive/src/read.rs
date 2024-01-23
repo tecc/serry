@@ -1,13 +1,16 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
-use syn::{spanned::Spanned, Data, DeriveInput, Error, Field, Fields, parse_quote, Path, LitInt};
+use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Field, Fields, LitInt, Path};
 
-use crate::{find_and_parse_serry_attr, Extrapolate, SerryAttr, SerryAttrFields, find_and_parse_serry_attr_auto, enumerate_variants, FieldOrder, default_discriminant_type, FieldName, process_fields};
+use crate::{
+    default_discriminant_type, enumerate_variants, find_and_parse_serry_attr,
+    find_and_parse_serry_attr_auto, process_fields, Extrapolate, FieldName, FieldOrder, SerryAttr,
+    SerryAttrFields,
+};
 
 fn version_ident() -> Ident {
     Ident::new("__version", Span::call_site())
 }
-
 
 pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
@@ -15,7 +18,12 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    fn deserialise_fields(fields: &Fields, root_attr: &SerryAttr, field_order: FieldOrder, target_type: &Path) -> TokenStream {
+    fn deserialise_fields(
+        fields: &Fields,
+        root_attr: &SerryAttr,
+        field_order: FieldOrder,
+        target_type: &Path,
+    ) -> TokenStream {
         fn deserialise_field(
             field: &Field,
             name: &FieldName,
@@ -29,7 +37,7 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
             let version = match root_attr.version_with_range_of(&field_attr) {
                 Ok(version) => version,
-                Err(e) => return e.to_compile_error()
+                Err(e) => return e.to_compile_error(),
             };
 
             let ty = &field.ty;
@@ -89,12 +97,11 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                     .map(|(name, field)| deserialise_field(field, &name, root_attr))
                     .collect();
 
-                let identifiers = vec.iter()
-                    .map(|v| {
-                        let output_ident = v.0.output_ident();
-                        let name = &v.0;
-                        quote!(#name: #output_ident)
-                    });
+                let identifiers = vec.iter().map(|v| {
+                    let output_ident = v.0.output_ident();
+                    let name = &v.0;
+                    quote!(#name: #output_ident)
+                });
 
                 (quote! {
                     #(#reading)*;
@@ -105,10 +112,10 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                 .into()
             }
             Fields::Unnamed(_) => {
-                let reading = vec.iter()
+                let reading = vec
+                    .iter()
                     .map(|data| deserialise_field(data.1, &data.0, root_attr));
-                let props = vec.iter()
-                    .map(|v| v.0.output_ident());
+                let props = vec.iter().map(|v| v.0.output_ident());
 
                 quote! {
                     #(#reading);*
@@ -122,11 +129,15 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
     enum VersionStrategy {
         OnlyAllowSame,
-        AnyWithinRange
+        AnyWithinRange,
     }
 
     fn version_check(attr: &SerryAttr, strategy: VersionStrategy) -> TokenStream {
-        let info = if let Some(info) = &attr.version_info { info } else { return quote!() };
+        let info = if let Some(info) = &attr.version_info {
+            info
+        } else {
+            return quote!();
+        };
 
         let version_id = version_ident();
         let ty = &info.version_type;
@@ -143,7 +154,8 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                     }
                 }
             }
-            VersionStrategy::AnyWithinRange => { // Default versioning strategy - may be any version less than or equal to the current one
+            VersionStrategy::AnyWithinRange => {
+                // Default versioning strategy - may be any version less than or equal to the current one
                 let second_condidtion = if minimum != version {
                     quote!(&& #version_id <= (#minimum as #ty))
                 } else {
@@ -155,7 +167,7 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                         return Err(_Error::custom(format!("unsupported version {} (up to version {} is supported)", #version_id, #version)));
                     }
                 }
-            },
+            }
         }
     }
 
@@ -165,46 +177,66 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
         output.extend(match &input.data {
             // Enums are versioned differently if the current and minimum version are the same (which it will be for most cases)
-            Data::Enum(_) if minimum == version => version_check(&root_attr, VersionStrategy::OnlyAllowSame),
+            Data::Enum(_) if minimum == version => {
+                version_check(&root_attr, VersionStrategy::OnlyAllowSame)
+            }
             _ => version_check(&root_attr, VersionStrategy::AnyWithinRange),
         })
     }
 
     let field_order = root_attr.field_order.unwrap_or_default();
     match &input.data {
-        Data::Struct(model) => {
-            output.extend(deserialise_fields(&model.fields, &root_attr, field_order, &parse_quote!(Self)))
-        },
+        Data::Struct(model) => output.extend(deserialise_fields(
+            &model.fields,
+            &root_attr,
+            field_order,
+            &parse_quote!(Self),
+        )),
         Data::Enum(model) => {
             let enumerated = enumerate_variants(model.variants.iter())?;
 
-            let discriminant_type = root_attr.discriminant_type.clone().unwrap_or_else(default_discriminant_type);
+            let discriminant_type = root_attr
+                .discriminant_type
+                .clone()
+                .unwrap_or_else(default_discriminant_type);
 
             let enum_variant_ident = Ident::new("__variant", Span::call_site());
-            output.extend(quote!(let #enum_variant_ident: #discriminant_type = input.read_value()?;));
+            output
+                .extend(quote!(let #enum_variant_ident: #discriminant_type = input.read_value()?;));
             let variants = enumerated.iter().map(|v| {
-                let discriminant = format!("{}{}", v.discriminant, discriminant_type.to_token_stream());
+                let discriminant =
+                    format!("{}{}", v.discriminant, discriminant_type.to_token_stream());
                 let discriminant = LitInt::new(discriminant.as_str(), Span::call_site());
                 let variant = v.variant;
                 let variant_name = &variant.ident;
                 let mut actual = TokenStream::new();
                 let field_order = v.attr.field_order.unwrap_or(field_order);
                 actual.extend(version_check(&v.attr, VersionStrategy::AnyWithinRange));
-                actual.extend(deserialise_fields(&variant.fields, &v.attr, field_order, &parse_quote!(Self::#variant_name)));
-                quote!{
+                actual.extend(deserialise_fields(
+                    &variant.fields,
+                    &v.attr,
+                    field_order,
+                    &parse_quote!(Self::#variant_name),
+                ));
+                quote! {
                     #discriminant => {
                         #actual
                     }
                 }
             });
-            output.extend(quote!{
+            output.extend(quote! {
                 return match #enum_variant_ident {
                     #(#variants),*,
                     _ => Err(_Error::custom("unexpected variant")) // included for safety
                 }
             });
         }
-        _ => return Err(Error::new_spanned(input, "unsupported type - you can only derive SerryRead for structs and enums")),
+        _ => {
+            return Err(Error::new_spanned(
+                input,
+                "unsupported type - you can only derive SerryRead for structs and enums",
+            ))
+        }
     };
 
     Ok(quote! {

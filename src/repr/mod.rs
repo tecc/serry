@@ -1,5 +1,5 @@
-mod primitives;
 mod alloc;
+mod primitives;
 mod tuples;
 
 pub trait SerrySized {
@@ -13,7 +13,10 @@ pub trait SerrySized {
     }
 }
 
-impl<T> SerrySized for &T where T: SerrySized + ?Sized {
+impl<T> SerrySized for &T
+where
+    T: SerrySized + ?Sized,
+{
     fn predict_size(&self) -> usize {
         T::predict_size(self)
     }
