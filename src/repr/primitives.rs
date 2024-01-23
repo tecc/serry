@@ -1,7 +1,7 @@
 use crate::{
     read::{ReadResult, SerryInput, SerryRead},
+    repr::SerrySized,
     write::{SerryOutput, SerryWrite, WriteResult},
-    repr::{SerrySized},
     Endian, SerryError,
 };
 use byteorder::{ReadBytesExt, WriteBytesExt};
@@ -79,7 +79,10 @@ impl SerryRead for bool {
         match value {
             BOOL_FALSE => Ok(false),
             BOOL_TRUE => Ok(true),
-            _ => Err(SerryError::custom(format!("bool is invalid - {} is not {} (false) nor {} (true)", value, BOOL_FALSE, BOOL_TRUE)))
+            _ => Err(SerryError::custom(format!(
+                "bool is invalid - {} is not {} (false) nor {} (true)",
+                value, BOOL_FALSE, BOOL_TRUE
+            ))),
         }
     }
 }
@@ -104,7 +107,10 @@ impl SerrySized for bool {
     }
 }
 
-impl<T> SerryWrite for [T] where T: SerryWrite {
+impl<T> SerryWrite for [T]
+where
+    T: SerryWrite,
+{
     fn serry_write(&self, output: &mut impl SerryOutput) -> WriteResult<()> {
         let length = self.len();
         output.write_value(length as u64)?;
@@ -114,7 +120,10 @@ impl<T> SerryWrite for [T] where T: SerryWrite {
         Ok(())
     }
 }
-impl<T> SerrySized for [T] where T: SerrySized {
+impl<T> SerrySized for [T]
+where
+    T: SerrySized,
+{
     fn predict_size(&self) -> usize {
         let mut size = u64::predict_constant_size().unwrap();
         match T::predict_constant_size() {
@@ -132,7 +141,10 @@ impl<T> SerrySized for [T] where T: SerrySized {
         None
     }
 }
-impl<T, const L: usize> SerrySized for [T; L] where T: SerrySized {
+impl<T, const L: usize> SerrySized for [T; L]
+where
+    T: SerrySized,
+{
     fn predict_size(&self) -> usize {
         match Self::predict_constant_size() {
             Some(v) => v,
@@ -149,15 +161,29 @@ impl<T, const L: usize> SerrySized for [T; L] where T: SerrySized {
     fn predict_constant_size() -> Option<usize> {
         match T::predict_constant_size() {
             Some(v) => Some(u64::predict_constant_size_unchecked() + (v * L)),
-            None => None
+            None => None,
         }
+    }
+}
+
+impl SerryWrite for str {
+    fn serry_write(&self, output: &mut impl SerryOutput) -> WriteResult<()> {
+        output.write_value(self.as_bytes())
+    }
+}
+impl SerrySized for str {
+    fn predict_size(&self) -> usize {
+        self.len()
+    }
+
+    fn predict_constant_size() -> Option<usize> {
+        None
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{SerryInput, SerryOutput};
-
+    use crate::{SerryInput, SerryOutput, SerrySized};
 
     macro_rules! range {
         ($i:ident: => $($block:tt)*) => {};
@@ -212,10 +238,12 @@ mod tests {
     fn bools() {
         let mut buf = Vec::new();
         buf.write_value(true).expect("Could not write");
+        assert_eq!(buf.len(), bool::predict_constant_size_unchecked());
         let value: bool = buf.as_slice().read_value().expect("Could not read");
         assert!(value);
         buf.clear();
         buf.write_value(false).expect("Could not write");
+        assert_eq!(buf.len(), bool::predict_constant_size_unchecked());
         let value: bool = buf.as_slice().read_value().expect("Could not read");
         assert!(!value);
     }
