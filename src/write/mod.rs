@@ -10,11 +10,6 @@ pub trait SerryWrite {
 }
 
 pub trait SerryOutput: Write + Sized {
-    #[cfg(feature = "checksum")]
-    fn with_checksum(&mut self) -> crate::checksum::ChecksumSerryOutput<Self> {
-        crate::checksum::ChecksumSerryOutput::new(self)
-    }
-
     fn write_value<T>(&mut self, value: T) -> WriteResult<()>
     where
         T: SerryWrite,

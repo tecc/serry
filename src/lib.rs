@@ -3,7 +3,10 @@ pub mod repr;
 pub mod write;
 
 #[cfg(feature = "checksum")]
-mod checksum;
+pub mod checksum;
+
+#[cfg(feature = "checksum")]
+pub use checksum::*;
 
 use std::{error::Error, fmt::Display};
 
