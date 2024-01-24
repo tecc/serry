@@ -171,7 +171,7 @@ enum FieldOrder {
 
 impl Default for FieldOrder {
     fn default() -> Self {
-        FieldOrder::Alphabetical
+        FieldOrder::AsSpecified
     }
 }
 
