@@ -22,7 +22,8 @@ impl SerrySized for OsStr {
 
 impl SerryRead for OsString {
     fn serry_read(input: &mut impl SerryInput) -> ReadResult<Self> {
-        Ok(Self::from(input.read_value::<Vec<u8>>())?)
+        // NOTE(tecc): This may cause issues. Something irks me about how this is written.
+        Ok(OsString::from(input.read_value::<String>()?))
     }
 }
 impl SerryWrite for OsString {
