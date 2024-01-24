@@ -229,12 +229,13 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                     &parse_quote!(Self::#variant_name),
                 ));
                 variant_discriminants.extend(quote! {
-                    const #discriminant_ident: #discriminant_type = #discriminant;
+                    #[allow(all)]
+                    const #discriminant_ident: #discriminant_type = { #discriminant };
                 });
                 read_body.extend(quote! {
                     {
                         if #enum_variant_ident == #discriminant_ident {
-                            return Ok(#actual)
+                            return { #actual };
                         }
                     }
                 });
@@ -257,6 +258,7 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
             #variant_discriminants
 
+            #[allow(all)]
             #[automatically_derived]
             impl #impl_generics ::serry::read::SerryRead for #ident #ty_generics #where_clause {
                 fn serry_read(input: &mut impl ::serry::read::SerryInput) -> ::serry::read::ReadResult<Self> {

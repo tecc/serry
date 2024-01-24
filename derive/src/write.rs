@@ -118,7 +118,8 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                 };
 
                 variant_discriminants.extend(quote! {
-                    const #discriminant_ident: #discriminant_type = #discriminant;
+                    #[allow(all)]
+                    const #discriminant_ident: #discriminant_type = { #discriminant };
                 });
                 quote!(Self::#variant_ident #params => {
                     output.write_value::<#discriminant_type>(#discriminant_ident)?;
@@ -146,6 +147,7 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
             #variant_discriminants
 
             #[automatically_derived]
+            #[allow(all)]
             impl #impl_generics ::serry::write::SerryWrite for #ident #ty_generics #where_clause {
                 fn serry_write(&self, output: &mut impl ::serry::write::SerryOutput) -> ::serry::write::WriteResult<()> {
                     #write_body

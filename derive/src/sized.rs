@@ -214,7 +214,8 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                 predict_size.extend(predict.on_self);
 
                 variant_discriminants.extend(quote! {
-                    const #discriminant_ident: #discriminant_type = #discriminant;
+                    #[allow(all)]
+                    const #discriminant_ident: #discriminant_type = { #discriminant };
                 });
                 quote!(Self::#variant_ident #params => {
                     let #size_ident = 0usize;
@@ -243,8 +244,9 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
     Ok(quote! {
         const _: () = {
-            #variant_discriminants;
+            #variant_discriminants
 
+            #[allow(all)]
             #[automatically_derived]
             impl #impl_generics ::serry::repr::SerrySized for #ident #ty_generics #where_clause {
                 fn predict_size(&self) -> usize {
