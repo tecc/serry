@@ -173,7 +173,7 @@ impl SerryWrite for str {
 }
 impl SerrySized for str {
     fn predict_size(&self) -> usize {
-        self.len()
+        self.as_bytes().predict_size()
     }
 
     fn predict_constant_size() -> Option<usize> {
@@ -238,11 +238,13 @@ mod tests {
     fn bools() {
         let mut buf = Vec::new();
         buf.write_value(true).expect("Could not write");
+        assert_eq!(buf.len(), true.predict_size());
         assert_eq!(buf.len(), bool::predict_constant_size_unchecked());
         let value: bool = buf.as_slice().read_value().expect("Could not read");
         assert!(value);
         buf.clear();
         buf.write_value(false).expect("Could not write");
+        assert_eq!(buf.len(), false.predict_size());
         assert_eq!(buf.len(), bool::predict_constant_size_unchecked());
         let value: bool = buf.as_slice().read_value().expect("Could not read");
         assert!(!value);

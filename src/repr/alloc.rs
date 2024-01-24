@@ -139,7 +139,7 @@ impl SerrySized for String {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Endian, SerryInput, SerryOutput, SerryRead};
+    use crate::{Endian, SerryInput, SerryOutput, SerryRead, SerrySized};
     use byteorder::ByteOrder;
     use std::{collections::HashMap, mem::size_of};
     #[test]
@@ -151,6 +151,7 @@ mod tests {
             let mut out: Vec<u8> = Vec::new();
 
             out.write_value(s).expect("Expected successful write");
+            assert_eq!(out.len(), s.predict_size());
 
             assert_eq!(&out[..length.len()], length);
             assert_eq!(&out[length.len()..], s.as_bytes());
