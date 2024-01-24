@@ -1,6 +1,7 @@
 mod alloc;
 mod primitives;
 mod tuples;
+mod os;
 
 pub trait SerrySized {
     fn predict_size(&self) -> usize;
