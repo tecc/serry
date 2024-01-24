@@ -1,11 +1,10 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
-use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Field, Fields, LitInt, Path};
+use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Expr, Field, Fields, Path};
 
 use crate::{
-    default_discriminant_type, enumerate_variants, find_and_parse_serry_attr,
-    find_and_parse_serry_attr_auto, process_fields, Extrapolate, FieldName, FieldOrder, SerryAttr,
-    SerryAttrFields,
+    enumerate_variants, find_and_parse_serry_attr, find_and_parse_serry_attr_auto, process_fields,
+    util, Extrapolate, FieldName, FieldOrder, SerryAttr, SerryAttrFields,
 };
 
 fn version_ident() -> Ident {
@@ -86,11 +85,11 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         let vec: Vec<(FieldName, &Field)> = if let Some(vec) = process_fields(fields, field_order) {
             vec
         } else {
-            return quote!();
+            return quote!(Ok(#target_type)).into_token_stream();
         };
 
         match fields {
-            Fields::Unit => quote!().into_token_stream(),
+            Fields::Unit => quote!(Ok(#target_type)).into_token_stream(),
             Fields::Named(_) => {
                 let reading: Vec<_> = vec
                     .iter()
@@ -125,7 +124,8 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         }
     }
 
-    let mut output = TokenStream::new();
+    let mut read_body = TokenStream::new();
+    let mut variant_discriminants = TokenStream::new();
 
     enum VersionStrategy {
         OnlyAllowSame,
@@ -175,7 +175,7 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         let version = info.current_version;
         let minimum = info.minimum_supported_version;
 
-        output.extend(match &input.data {
+        read_body.extend(match &input.data {
             // Enums are versioned differently if the current and minimum version are the same (which it will be for most cases)
             Data::Enum(_) if minimum == version => {
                 version_check(&root_attr, VersionStrategy::OnlyAllowSame)
@@ -186,29 +186,39 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
     let field_order = root_attr.field_order.unwrap_or_default();
     match &input.data {
-        Data::Struct(model) => output.extend(deserialise_fields(
+        Data::Struct(model) => read_body.extend(deserialise_fields(
             &model.fields,
             &root_attr,
             field_order,
             &parse_quote!(Self),
         )),
         Data::Enum(model) => {
-            let enumerated = enumerate_variants(model.variants.iter())?;
-
             let discriminant_type = root_attr
                 .discriminant_type
                 .clone()
-                .unwrap_or_else(default_discriminant_type);
+                .unwrap_or_else(util::default_discriminant_type);
+            let enumerated = enumerate_variants(&discriminant_type, model.variants.iter())?;
 
+            let str_type = util::is_str_type(&discriminant_type);
+            let read_discriminant_type = if str_type {
+                parse_quote!(::serry::_internal::String)
+            } else {
+                discriminant_type.clone()
+            };
             let enum_variant_ident = Ident::new("__variant", Span::call_site());
-            output
-                .extend(quote!(let #enum_variant_ident: #discriminant_type = input.read_value()?;));
-            let variants = enumerated.iter().map(|v| {
-                let discriminant =
-                    format!("{}{}", v.discriminant, discriminant_type.to_token_stream());
-                let discriminant = LitInt::new(discriminant.as_str(), Span::call_site());
+            /*let enum_variant_expr: Expr = if str_type {
+                try_parse_quote!(#enum_variant_ident.as_str())?
+            } else {
+                try_parse_quote!(#enum_variant_ident)?
+            };*/
+            read_body.extend(
+                quote!(let #enum_variant_ident: #read_discriminant_type = input.read_value()?;),
+            );
+            for v in enumerated.iter() {
                 let variant = v.variant;
                 let variant_name = &variant.ident;
+                let discriminant = &v.discriminant;
+                let discriminant_ident = util::discriminant_name(&variant.ident);
                 let mut actual = TokenStream::new();
                 let field_order = v.attr.field_order.unwrap_or(field_order);
                 actual.extend(version_check(&v.attr, VersionStrategy::AnyWithinRange));
@@ -218,17 +228,19 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                     field_order,
                     &parse_quote!(Self::#variant_name),
                 ));
-                quote! {
-                    #discriminant => {
-                        #actual
+                variant_discriminants.extend(quote! {
+                    const #discriminant_ident: #discriminant_type = #discriminant;
+                });
+                read_body.extend(quote! {
+                    {
+                        if #enum_variant_ident == #discriminant_ident {
+                            return Ok(#actual)
+                        }
                     }
-                }
-            });
-            output.extend(quote! {
-                return match #enum_variant_ident {
-                    #(#variants),*,
-                    _ => Err(_Error::custom("unexpected variant")) // included for safety
-                }
+                });
+            }
+            read_body.extend(quote! {
+                return Err(_Error::custom("unexpected variant")) // included for safety
             });
         }
         _ => {
@@ -242,10 +254,13 @@ pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     Ok(quote! {
         const _: () = {
             use ::serry::SerryError as _Error;
+
+            #variant_discriminants
+
             #[automatically_derived]
             impl #impl_generics ::serry::read::SerryRead for #ident #ty_generics #where_clause {
                 fn serry_read(input: &mut impl ::serry::read::SerryInput) -> ::serry::read::ReadResult<Self> {
-                    #output
+                    #read_body
                 }
             }
         };

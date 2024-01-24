@@ -3,8 +3,8 @@ use quote::ToTokens;
 use syn::{spanned::Spanned, Data, DeriveInput, Error, Fields, Token, TypeReference};
 
 use crate::{
-    create_pattern_match, default_discriminant_type, enumerate_variants, find_and_parse_serry_attr,
-    find_and_parse_serry_attr_auto, process_fields, FieldName, FieldOrder, ProcessedFields,
+    create_pattern_match, enumerate_variants, find_and_parse_serry_attr,
+    find_and_parse_serry_attr_auto, process_fields, util, FieldName, FieldOrder, ProcessedFields,
     SerryAttr, SerryAttrFields,
 };
 
@@ -66,7 +66,8 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         (quote!(#(#vec)*), Some(processed_fields))
     }
 
-    let mut output = TokenStream::new();
+    let mut write_body = TokenStream::new();
+    let mut variant_discriminants = TokenStream::new();
 
     if let Some(info) = &root_attr.version_info {
         match &input.data {
@@ -78,7 +79,7 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
         let ty = &info.version_type;
         let version = info.current_version;
-        output.extend(quote! {
+        write_body.extend(quote! {
             output.write_value::<#ty>(#version as #ty)?;
         })
     }
@@ -88,18 +89,19 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         Data::Struct(model) => {
             let accessor = |value: &FieldName| quote!(&self.#value);
             let serialise = serialise_fields(&model.fields, &root_attr, field_order, accessor);
-            output.extend(serialise.0);
+            write_body.extend(serialise.0);
         }
         Data::Enum(model) => {
             let accessor = |v: &FieldName| v.output_ident();
-            let variants = enumerate_variants(model.variants.iter())?;
-            let discriminant_ty = root_attr
+            let discriminant_type = root_attr
                 .discriminant_type
                 .clone()
-                .unwrap_or_else(default_discriminant_type);
+                .unwrap_or_else(util::default_discriminant_type);
+            let variants = enumerate_variants(&discriminant_type, model.variants.iter())?;
             let cases = variants.iter().map(|var| {
                 let variant_ident = &var.variant.ident;
-                let discriminant = var.discriminant;
+                let discriminant = &var.discriminant;
+                let discriminant_ident = util::discriminant_name(variant_ident);
                 let field_order = var.attr.field_order.unwrap_or(field_order);
                 let (serialise, fields) =
                     serialise_fields(&var.variant.fields, &var.attr, field_order, accessor);
@@ -115,12 +117,15 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                     quote!()
                 };
 
+                variant_discriminants.extend(quote! {
+                    const #discriminant_ident: #discriminant_type = #discriminant;
+                });
                 quote!(Self::#variant_ident #params => {
-                    output.write_value::<#discriminant_ty>(#discriminant as #discriminant_ty)?;
+                    output.write_value::<#discriminant_type>(#discriminant_ident)?;
                     #serialise
                 })
             });
-            output.extend(quote! {
+            write_body.extend(quote! {
                 match self {
                     #(#cases),*,
                     _ => panic!("Unexpected enum variant")
@@ -138,10 +143,12 @@ pub fn derive_write_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
     Ok(quote! {
         const _: () = {
+            #variant_discriminants
+
             #[automatically_derived]
             impl #impl_generics ::serry::write::SerryWrite for #ident #ty_generics #where_clause {
                 fn serry_write(&self, output: &mut impl ::serry::write::SerryOutput) -> ::serry::write::WriteResult<()> {
-                    #output
+                    #write_body
                     Ok(())
                 }
             }

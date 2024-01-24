@@ -2,6 +2,8 @@ pub mod read;
 pub mod repr;
 pub mod write;
 
+#[doc(hidden)]
+pub mod _internal;
 #[cfg(feature = "checksum")]
 pub mod checksum;
 

@@ -1,12 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::ToTokens;
 use syn::parse::{Parse, ParseStream};
 use syn::{
     parenthesized, parse_macro_input, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput,
-    Error, LitInt, Path, Token, Type, TypePath,
+    Error, Expr, ExprLit, Lit, LitInt, Path, Token, Type, TypePath,
 };
 use syn::{Field, Fields, LitStr, Variant};
 
@@ -15,6 +15,7 @@ extern crate quote;
 
 mod read;
 mod sized;
+mod util;
 mod write;
 
 #[proc_macro_derive(SerryWrite, attributes(serry))]
@@ -122,8 +123,8 @@ struct SerryAttr<'a> {
     version_info: Option<RootVersionInfo>,
     version_range: Option<VersionRange>,
     extrapolate: Option<Extrapolate>,
-    discriminant_value: Option<LitInt>,
-    discriminant_type: Option<TypePath>,
+    discriminant_value: Option<Expr>,
+    discriminant_type: Option<Type>,
     field_order: Option<FieldOrder>,
     attr: Option<&'a Attribute>,
 }
@@ -366,8 +367,8 @@ fn parse_serry_attr(attr: &Attribute, fields: SerryAttrFields) -> Result<SerryAt
             let value;
             parenthesized!(value in meta.input);
 
-            let path: TypePath = value.parse()?;
-            discriminant_type = Some(path);
+            let ty = value.parse()?;
+            discriminant_type = Some(ty);
 
             Ok(())
         }
@@ -449,21 +450,20 @@ fn find_and_parse_serry_attr_auto<'a>(
     )
 }
 
-fn default_discriminant_type() -> TypePath {
-    parse_quote!(u16)
-}
-
 struct AnnotatedVariant<'a> {
     pub variant: &'a Variant,
     pub attr: SerryAttr<'a>,
-    pub discriminant: usize,
+    pub discriminant: Expr,
 }
 
-fn enumerate_variants<'a, I>(variants: I) -> Result<Vec<AnnotatedVariant<'a>>, Error>
+fn enumerate_variants<'a, I>(
+    discriminant_type: &Type,
+    variants: I,
+) -> Result<Vec<AnnotatedVariant<'a>>, Error>
 where
     I: Iterator<Item = &'a Variant>,
 {
-    let mut reserved_nums = HashSet::new();
+    let mut reserved_values = HashSet::new();
 
     let mut preprocessed = Vec::new();
     for variant in variants {
@@ -471,15 +471,14 @@ where
 
         let discriminant = match &attr.discriminant_value {
             Some(value) => {
-                let parsed_value: usize = value.base10_parse()?;
-                if reserved_nums.contains(&parsed_value) {
+                if reserved_values.contains(value) {
                     return Err(Error::new_spanned(
                         value,
                         "multiple variants can not have the same value",
                     ));
                 }
-                reserved_nums.insert(parsed_value);
-                Some(parsed_value)
+                reserved_values.insert(value.clone());
+                Some(value.clone())
             }
             None => None,
         };
@@ -491,28 +490,41 @@ where
     let mut next = 0usize;
 
     for (variant, attr, discriminant) in preprocessed {
-        let discriminant = if let Some(discriminant) = discriminant {
-            discriminant
+        let actual_discriminant = if let Some(discriminant) = discriminant {
+            discriminant.clone()
         } else {
-            let value = loop {
-                if reserved_nums.contains(&next) {
-                    next += 1;
-                    continue;
+            // TODO: Handling of int types
+            if util::is_str_type(discriminant_type) {
+                let value = variant.ident.to_string();
+                let expr: Expr = syn::parse2(Lit::new(Literal::string(&value)).to_token_stream())?;
+                if reserved_values.contains(&expr) {
+                    return Err(Error::new_spanned(
+                        &variant.ident,
+                        format!("Discriminator `{}` is already in use", value),
+                    ));
                 }
-                break next;
-            };
-            next += 1;
-            value
+                expr
+            } else {
+                let value = loop {
+                    let inner: Lit = Lit::new(Literal::usize_unsuffixed(next));
+                    let expr = parse_quote!(#inner as #discriminant_type);
+                    if reserved_values.contains(&expr) {
+                        next += 1;
+                        continue;
+                    }
+                    break expr;
+                };
+                next += 1;
+                value
+            }
         };
 
         vec.push(AnnotatedVariant {
             variant,
             attr,
-            discriminant,
+            discriminant: actual_discriminant,
         })
     }
-
-    vec.sort_by_key(|v| v.discriminant);
 
     Ok(vec)
 }
@@ -539,5 +551,52 @@ impl FieldName {
             ["__field_", name.as_str()].join("").as_str(),
             Span::call_site(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::read::derive_read_impl;
+    use crate::sized::derive_sized_impl;
+    use crate::write::derive_write_impl;
+    use syn::parse_quote;
+
+    #[test]
+    fn derive() {
+        let check_validity = |input: TokenStream| {
+            let file = syn::parse_file(&input.to_string()).expect("Failed parse");
+            // println!("{}", prettyplease::unparse(&file));
+        };
+
+        let derive_test = |input: DeriveInput| {
+            check_validity(derive_read_impl(input.clone()).expect("Could not derive SerryRead"));
+            check_validity(derive_write_impl(input.clone()).expect("Could not derive SerryWrite"));
+            check_validity(derive_sized_impl(input.clone()).expect("Could not derive SerrySized"));
+        };
+
+        derive_test(parse_quote!(
+            #[derive(SerryRead, SerryWrite, SerrySized)]
+            enum StringDiscriminated {
+                VariantOne,
+                VariantTwo,
+            }
+        ));
+        derive_test(parse_quote!(
+            #[derive(SerryRead, SerryWrite, SerrySized)]
+            #[serry(repr(&'static str))]
+            enum StringDiscriminated {
+                VariantOne,
+                VariantTwo,
+            }
+        ));
+        derive_test(parse_quote!(
+            #[derive(SerryRead, SerryWrite, SerrySized)]
+            #[serry(repr(u16))]
+            enum IntDiscriminated {
+                VariantOne,
+                VariantTwo,
+            }
+        ));
     }
 }

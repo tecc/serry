@@ -3,8 +3,8 @@ use quote::ToTokens;
 use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Fields};
 
 use crate::{
-    create_pattern_match, default_discriminant_type, enumerate_variants, find_and_parse_serry_attr,
-    find_and_parse_serry_attr_auto, process_fields, FieldName, FieldOrder, ProcessedFields,
+    create_pattern_match, enumerate_variants, find_and_parse_serry_attr,
+    find_and_parse_serry_attr_auto, process_fields, util, FieldName, FieldOrder, ProcessedFields,
     SerryAttr, SerryAttrFields,
 };
 
@@ -121,6 +121,8 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     let mut predict_constant = TokenStream::new();
     let mut predict_constant_unchecked = TokenStream::new();
 
+    let mut variant_discriminants = TokenStream::new();
+
     fn add_version(
         attr: &SerryAttr,
         output: &mut [&mut TokenStream],
@@ -183,14 +185,15 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
         }
         Data::Enum(model) => {
             let accessor = |v: &FieldName| v.output_ident();
-            let variants = enumerate_variants(model.variants.iter())?;
-            let discriminant_ty = root_attr
+            let discriminant_type = root_attr
                 .discriminant_type
                 .clone()
-                .unwrap_or_else(default_discriminant_type);
+                .unwrap_or_else(util::default_discriminant_type);
+            let variants = enumerate_variants(&discriminant_type, model.variants.iter())?;
             let cases = variants.iter().map(|var| {
                 let variant_ident = &var.variant.ident;
-                // let discriminant = var.discriminant;
+                let discriminant = &var.discriminant;
+                let discriminant_ident = util::discriminant_name(&variant_ident);
                 let field_order = var.attr.field_order.unwrap_or(field_order);
                 let (predict, fields) =
                     sized_fields(&var.variant.fields, &var.attr, field_order, accessor);
@@ -210,14 +213,17 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
                 add_version(&var.attr, &mut [&mut predict_size], None).unwrap();
                 predict_size.extend(predict.on_self);
 
+                variant_discriminants.extend(quote! {
+                    const #discriminant_ident: #discriminant_type = #discriminant;
+                });
                 quote!(Self::#variant_ident #params => {
-                    let #size_ident = 0;
+                    let #size_ident = 0usize;
+                    let #size_ident = #size_ident + #discriminant_ident.predict_size();
                     #predict_size
                     #size_ident
                 })
             });
             predict_on_self.extend(quote! {
-                let #size_ident = #size_ident + <#discriminant_ty as ::serry::repr::SerrySized>::predict_constant_size_unchecked();
                 let #size_ident = #size_ident + match self {
                     #(#cases),*,
                     _ => panic!("Unexpected enum variant")
@@ -237,6 +243,8 @@ pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
 
     Ok(quote! {
         const _: () = {
+            #variant_discriminants;
+
             #[automatically_derived]
             impl #impl_generics ::serry::repr::SerrySized for #ident #ty_generics #where_clause {
                 fn predict_size(&self) -> usize {
