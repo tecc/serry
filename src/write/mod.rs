@@ -2,6 +2,9 @@ use crate::SerryError;
 use std::io::Write;
 
 mod builtin;
+mod wrap;
+
+pub use wrap::SerryOutputWrapper;
 
 pub type WriteResult<T> = Result<T, SerryError>;
 
@@ -9,19 +12,14 @@ pub trait SerryWrite {
     fn serry_write(&self, output: &mut impl SerryOutput) -> WriteResult<()>;
 }
 
-pub trait SerryOutput: Write + Sized {
+pub trait SerryOutput: Write {
+    #[inline]
     fn write_value<T>(&mut self, value: T) -> WriteResult<()>
     where
         T: SerryWrite,
     {
-        value.serry_write(self)
+        // So we can make sure it's always Sized
+        let mut wrapper = wrap::SerryOutputWrapper(self);
+        value.serry_write(&mut wrapper)
     }
-
-    /*fn serry_str(&mut self, s: impl AsRef<str>) -> WriteResult<()> {
-        let s = s.as_ref();
-        let bytes = s.as_bytes();
-        self.write_u64::<Endian>(bytes.len() as u64)?;
-        self.write_all(bytes)?;
-        Ok(())
-    }*/
 }
