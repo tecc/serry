@@ -11,7 +11,7 @@ fn version_ident() -> Ident {
     Ident::new("__version", Span::call_site())
 }
 
-pub fn derive_read_impl(input: DeriveInput) -> Result<TokenStream, Error> {
+pub fn derive_read_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
 
     let ident = &input.ident;

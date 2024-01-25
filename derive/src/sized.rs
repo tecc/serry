@@ -12,7 +12,7 @@ fn get_size_ident() -> Ident {
     return parse_quote!(__size);
 }
 
-pub fn derive_sized_impl(input: DeriveInput) -> Result<TokenStream, Error> {
+pub fn derive_sized_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
 
     let size_ident = get_size_ident();

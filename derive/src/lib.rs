@@ -18,20 +18,20 @@ mod sized;
 mod util;
 mod write;
 
-#[proc_macro_derive(SerryWrite, attributes(serry))]
-pub fn derive_write(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+#[proc_macro_derive(SerryRead, attributes(serry))]
+pub fn derive_read(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item = parse_macro_input!(item as DeriveInput);
-    match write::derive_write_impl(item) {
+    match read::derive_read_impl(&item) {
         Ok(output) => output,
         Err(e) => e.to_compile_error(),
     }
     .into()
 }
 
-#[proc_macro_derive(SerryRead, attributes(serry))]
-pub fn derive_read(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+#[proc_macro_derive(SerryWrite, attributes(serry))]
+pub fn derive_write(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item = parse_macro_input!(item as DeriveInput);
-    match read::derive_read_impl(item) {
+    match write::derive_write_impl(&item) {
         Ok(output) => output,
         Err(e) => e.to_compile_error(),
     }
@@ -41,11 +41,26 @@ pub fn derive_read(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro_derive(SerrySized, attributes(serry))]
 pub fn derive_sized(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item = parse_macro_input!(item as DeriveInput);
-    match sized::derive_sized_impl(item) {
-        Ok(output) => output,
-        Err(e) => e.to_compile_error(),
-    }
-    .into()
+    sized::derive_sized_impl(&item)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+#[proc_macro_derive(SerryTraits, attributes(serry))]
+pub fn derive_all(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let item = parse_macro_input!(item as DeriveInput);
+
+    let mut output = TokenStream::new();
+    let mut extend = |result: Result<_, Error>| match result {
+        Ok(content) => output.extend(content),
+        Err(e) => output.extend(e.to_compile_error()),
+    };
+
+    extend(read::derive_read_impl(&item));
+    extend(write::derive_write_impl(&item));
+    extend(sized::derive_sized_impl(&item));
+
+    output.into()
 }
 
 type ProcessedFields<'a> = Vec<(FieldName, &'a Field)>;
@@ -570,9 +585,9 @@ mod tests {
         };
 
         let derive_test = |input: DeriveInput| {
-            check_validity(derive_read_impl(input.clone()).expect("Could not derive SerryRead"));
-            check_validity(derive_write_impl(input.clone()).expect("Could not derive SerryWrite"));
-            check_validity(derive_sized_impl(input.clone()).expect("Could not derive SerrySized"));
+            check_validity(derive_read_impl(&input).expect("Could not derive SerryRead"));
+            check_validity(derive_write_impl(&input).expect("Could not derive SerryWrite"));
+            check_validity(derive_sized_impl(&input).expect("Could not derive SerrySized"));
         };
 
         derive_test(parse_quote!(
