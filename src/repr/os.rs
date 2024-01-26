@@ -1,6 +1,5 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use byteorder::WriteBytesExt;
 use crate::{SerryInput, SerryOutput, SerryRead, SerrySized, SerryWrite};
 use crate::read::ReadResult;
 use crate::write::WriteResult;
