@@ -2,11 +2,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::ToTokens;
 use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Fields};
 
-use crate::{
-    create_pattern_match, enumerate_variants, find_and_parse_serry_attr,
-    find_and_parse_serry_attr_auto, process_fields, util, FieldName, FieldOrder, ProcessedFields,
-    SerryAttr, SerryAttrFields,
-};
+use crate::{create_pattern_match, enumerate_variants, find_and_parse_serry_attr, find_and_parse_serry_attr_auto, process_fields, util, FieldName, FieldOrder, ProcessedFields, SerryAttr, SerryAttrFields, create_where_clause};
 
 fn get_size_ident() -> Ident {
     return parse_quote!(__size);
@@ -15,9 +11,13 @@ fn get_size_ident() -> Ident {
 pub fn derive_sized_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
 
+    let trait_type = quote!(::serry::repr::SerrySized);
+    
     let size_ident = get_size_ident();
     let ident = input.ident.clone();
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
+    
+    let where_clause = create_where_clause(trait_type.to_token_stream(), &input.generics);
 
     #[derive(Default)]
     struct Predict {
@@ -248,7 +248,7 @@ pub fn derive_sized_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
 
             #[allow(all)]
             #[automatically_derived]
-            impl #impl_generics ::serry::repr::SerrySized for #ident #ty_generics #where_clause {
+            impl #impl_generics #trait_type for #ident #ty_generics #where_clause {
                 fn predict_size(&self) -> usize {
                     let #size_ident = 0usize;
                     #predict_on_self

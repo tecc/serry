@@ -6,7 +6,8 @@ use quote::ToTokens;
 use syn::parse::{Parse, ParseStream};
 use syn::{
     parenthesized, parse_macro_input, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput,
-    Error, Expr, ExprLit, Lit, LitInt, Path, Token, Type, TypePath,
+    Error, Expr, ExprLit, Generics, Lit, LitInt, Path, Token, Type, TypePath, WhereClause,
+    WherePredicate,
 };
 use syn::{Field, Fields, LitStr, Variant};
 
@@ -569,6 +570,26 @@ impl FieldName {
     }
 }
 
+fn create_where_clause(required_traits: TokenStream, generics: &Generics) -> Option<WhereClause> {
+    let mut custom_bounds: Vec<WherePredicate> = Vec::new();
+
+    for generic in generics.type_params() {
+        let name = &generic.ident;
+        custom_bounds.push(parse_quote!(#name: #required_traits));
+    }
+
+    let mut clause = generics.where_clause.clone();
+    if custom_bounds.len() < 1 {
+        return clause;
+    }
+    if let Some(clause) = &mut clause {
+        clause.predicates.extend(custom_bounds.into_iter());
+    } else {
+        clause = Some(parse_quote!(where #(#custom_bounds),*));
+    }
+    clause
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,5 +634,11 @@ mod tests {
                 VariantTwo,
             }
         ));
+        derive_test(parse_quote!(
+            #[derive(SerryTraits)]
+            struct ThingWithTypeParams<K, V: ?Sized> {
+                map: HashMap<K, V>,
+            }
+        ))
     }
 }

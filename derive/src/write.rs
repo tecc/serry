@@ -3,7 +3,7 @@ use quote::ToTokens;
 use syn::{spanned::Spanned, Data, DeriveInput, Error, Fields, Token, TypeReference};
 
 use crate::{
-    create_pattern_match, enumerate_variants, find_and_parse_serry_attr,
+    create_pattern_match, create_where_clause, enumerate_variants, find_and_parse_serry_attr,
     find_and_parse_serry_attr_auto, process_fields, util, FieldName, FieldOrder, ProcessedFields,
     SerryAttr, SerryAttrFields,
 };
@@ -11,8 +11,12 @@ use crate::{
 pub fn derive_write_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
 
+    let trait_type = quote!(::serry::write::SerryWrite);
+
     let ident = input.ident.clone();
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
+
+    let where_clause = create_where_clause(trait_type.to_token_stream(), &input.generics);
 
     fn serialise_fields<'a, T>(
         fields: &'a Fields,

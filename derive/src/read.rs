@@ -2,10 +2,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
 use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Expr, Field, Fields, Path};
 
-use crate::{
-    enumerate_variants, find_and_parse_serry_attr, find_and_parse_serry_attr_auto, process_fields,
-    util, Extrapolate, FieldName, FieldOrder, SerryAttr, SerryAttrFields,
-};
+use crate::{enumerate_variants, find_and_parse_serry_attr, find_and_parse_serry_attr_auto, process_fields, util, Extrapolate, FieldName, FieldOrder, SerryAttr, SerryAttrFields, create_where_clause};
 
 fn version_ident() -> Ident {
     Ident::new("__version", Span::call_site())
@@ -13,9 +10,13 @@ fn version_ident() -> Ident {
 
 pub fn derive_read_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
+    
+    let trait_type = quote!(::serry::read::SerryRead);
 
     let ident = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
+
+    let where_clause = create_where_clause(trait_type.to_token_stream(), &input.generics);
 
     fn deserialise_fields(
         fields: &Fields,
@@ -260,7 +261,7 @@ pub fn derive_read_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
 
             #[allow(all)]
             #[automatically_derived]
-            impl #impl_generics ::serry::read::SerryRead for #ident #ty_generics #where_clause {
+            impl #impl_generics #trait_type for #ident #ty_generics #where_clause {
                 fn serry_read(input: &mut impl ::serry::read::SerryInput) -> ::serry::read::ReadResult<Self> {
                     #read_body
                 }
