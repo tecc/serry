@@ -181,32 +181,42 @@ impl SerrySized for str {
     }
 }
 
-impl<T> SerryRead for Option<T> where T: SerryRead {
+impl<T> SerryRead for Option<T>
+where
+    T: SerryRead,
+{
     fn serry_read(input: &mut impl SerryInput) -> ReadResult<Self> {
         if input.read_value::<bool>()? {
-            Ok(Some(input.read_value::<T>()?)
+            Ok(Some(input.read_value::<T>()?))
         } else {
             Ok(None)
         }
     }
 }
-impl<T> SerryWrite for Option<T> where T: SerryWrite {
+impl<T> SerryWrite for Option<T>
+where
+    T: SerryWrite,
+{
     fn serry_write(&self, output: &mut impl SerryOutput) -> WriteResult<()> {
         match self {
             Some(value) => {
                 output.write_value(true)?;
                 output.write_value(value)
-            },
-            None => output.write_value(false)
+            }
+            None => output.write_value(false),
         }
     }
 }
-impl<T> SerrySized for Option<T> where T: SerrySized {
+impl<T> SerrySized for Option<T>
+where
+    T: SerrySized,
+{
     fn predict_size(&self) -> usize {
-        bool::predict_constant_size_unchecked() + match self {
-            Some(value) => value.predict_size(),
-            None => 0
-        }
+        bool::predict_constant_size_unchecked()
+            + match self {
+                Some(value) => value.predict_size(),
+                None => 0,
+            }
     }
 
     fn predict_constant_size() -> Option<usize> {
