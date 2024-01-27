@@ -1,12 +1,15 @@
+use crate::attr::{
+    find_and_parse_serry_attr, find_and_parse_serry_attr_auto, FieldOrder, SerryAttr,
+    SerryAttrFields,
+};
+use crate::util;
+use crate::util::{
+    create_where_clause, enumerate_variants, output_fields, process_fields, FieldName,
+    ProcessedFields,
+};
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
 use syn::{spanned::Spanned, Data, DeriveInput, Error, Fields, Token, TypeReference};
-
-use crate::{
-    create_pattern_match, create_where_clause, enumerate_variants, find_and_parse_serry_attr,
-    find_and_parse_serry_attr_auto, generate_where_clause, process_fields, util, FieldName,
-    FieldOrder, ProcessedFields, SerryAttr, SerryAttrFields,
-};
 
 pub fn derive_write_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
@@ -117,7 +120,7 @@ pub fn derive_write_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
                         Fields::Named(_) => false,
                         Fields::Unnamed(_) => true,
                     };
-                    create_pattern_match(fields.iter().map(|v| &v.0), unnamed)
+                    output_fields(fields.iter().map(|v| &v.0), unnamed)
                 } else {
                     quote!()
                 };

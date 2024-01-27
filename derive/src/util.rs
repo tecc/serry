@@ -1,9 +1,15 @@
-use crate::WherePredicates;
-use proc_macro2::{Ident, Span, TokenStream, TokenTree};
+mod field_name;
+mod variants;
+mod where_pred;
+
+use proc_macro2::{Ident, Span};
 use quote::IdentFragment;
-use std::fmt::Display;
-use std::str::FromStr;
+
 use syn::{parse_quote, LitStr, Path, Type};
+
+pub use field_name::*;
+pub use variants::*;
+pub use where_pred::*;
 
 pub fn discriminant_name(str: impl IdentFragment) -> Ident {
     quote::format_ident!("__discriminant_{}", str)

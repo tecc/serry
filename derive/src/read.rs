@@ -1,12 +1,12 @@
+use crate::attr::{
+    find_and_parse_serry_attr, find_and_parse_serry_attr_auto, Extrapolate, FieldOrder, SerryAttr,
+    SerryAttrFields,
+};
+use crate::util;
+use crate::util::{create_where_clause, enumerate_variants, process_fields, FieldName};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
-use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Expr, Field, Fields, Path};
-
-use crate::{
-    combine_where_clause, create_where_clause, enumerate_variants, find_and_parse_serry_attr,
-    find_and_parse_serry_attr_auto, generate_where_clause, process_fields, util, Extrapolate,
-    FieldName, FieldOrder, SerryAttr, SerryAttrFields,
-};
+use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Field, Fields, Path};
 
 fn version_ident() -> Ident {
     Ident::new("__version", Span::call_site())

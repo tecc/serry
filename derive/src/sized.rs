@@ -1,12 +1,15 @@
+use crate::attr::{
+    find_and_parse_serry_attr, find_and_parse_serry_attr_auto, FieldOrder, SerryAttr,
+    SerryAttrFields,
+};
+use crate::util;
+use crate::util::{
+    create_where_clause, enumerate_variants, output_fields, process_fields, FieldName,
+    ProcessedFields,
+};
 use proc_macro2::{Ident, TokenStream};
 use quote::ToTokens;
 use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Fields};
-
-use crate::{
-    combine_where_clause, create_pattern_match, create_where_clause, enumerate_variants,
-    find_and_parse_serry_attr, find_and_parse_serry_attr_auto, generate_where_clause,
-    process_fields, util, FieldName, FieldOrder, ProcessedFields, SerryAttr, SerryAttrFields,
-};
 
 fn get_size_ident() -> Ident {
     return parse_quote!(__size);
@@ -208,7 +211,7 @@ pub fn derive_sized_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
                         Fields::Named(_) => false,
                         Fields::Unnamed(_) => true,
                     };
-                    create_pattern_match(fields.iter().map(|v| &v.0), unnamed)
+                    output_fields(fields.iter().map(|v| &v.0), unnamed)
                 } else {
                     quote!()
                 };
