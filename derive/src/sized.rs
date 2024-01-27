@@ -2,7 +2,11 @@ use proc_macro2::{Ident, TokenStream};
 use quote::ToTokens;
 use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Fields};
 
-use crate::{create_pattern_match, enumerate_variants, find_and_parse_serry_attr, find_and_parse_serry_attr_auto, process_fields, util, FieldName, FieldOrder, ProcessedFields, SerryAttr, SerryAttrFields, create_where_clause};
+use crate::{
+    combine_where_clause, create_pattern_match, create_where_clause, enumerate_variants,
+    find_and_parse_serry_attr, find_and_parse_serry_attr_auto, generate_where_clause,
+    process_fields, util, FieldName, FieldOrder, ProcessedFields, SerryAttr, SerryAttrFields,
+};
 
 fn get_size_ident() -> Ident {
     return parse_quote!(__size);
@@ -11,13 +15,13 @@ fn get_size_ident() -> Ident {
 pub fn derive_sized_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
 
-    let trait_type = quote!(::serry::repr::SerrySized);
-    
+    let trait_path = util::trait_sized_path();
+
     let size_ident = get_size_ident();
     let ident = input.ident.clone();
     let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
-    
-    let where_clause = create_where_clause(trait_type.to_token_stream(), &input.generics);
+
+    let where_clause = create_where_clause(&root_attr.bounds.sized, &trait_path, &input.generics);
 
     #[derive(Default)]
     struct Predict {
@@ -244,11 +248,13 @@ pub fn derive_sized_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
 
     Ok(quote! {
         const _: () = {
+            use #trait_path;
+
             #variant_discriminants
 
             #[allow(all)]
             #[automatically_derived]
-            impl #impl_generics #trait_type for #ident #ty_generics #where_clause {
+            impl #impl_generics #trait_path for #ident #ty_generics #where_clause {
                 fn predict_size(&self) -> usize {
                     let #size_ident = 0usize;
                     #predict_on_self

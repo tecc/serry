@@ -4,19 +4,20 @@ use syn::{spanned::Spanned, Data, DeriveInput, Error, Fields, Token, TypeReferen
 
 use crate::{
     create_pattern_match, create_where_clause, enumerate_variants, find_and_parse_serry_attr,
-    find_and_parse_serry_attr_auto, process_fields, util, FieldName, FieldOrder, ProcessedFields,
-    SerryAttr, SerryAttrFields,
+    find_and_parse_serry_attr_auto, generate_where_clause, process_fields, util, FieldName,
+    FieldOrder, ProcessedFields, SerryAttr, SerryAttrFields,
 };
 
 pub fn derive_write_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
 
-    let trait_type = quote!(::serry::write::SerryWrite);
+    let error_type = util::error_type_path();
+    let trait_path = util::trait_write_path();
 
     let ident = input.ident.clone();
     let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
 
-    let where_clause = create_where_clause(trait_type.to_token_stream(), &input.generics);
+    let where_clause = create_where_clause(&root_attr.bounds.write, &trait_path, &input.generics);
 
     fn serialise_fields<'a, T>(
         fields: &'a Fields,
@@ -148,11 +149,14 @@ pub fn derive_write_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
 
     Ok(quote! {
         const _: () = {
+            use #error_type as _Error;
+            use #trait_path;
+
             #variant_discriminants
 
             #[automatically_derived]
             #[allow(all)]
-            impl #impl_generics ::serry::write::SerryWrite for #ident #ty_generics #where_clause {
+            impl #impl_generics #trait_path for #ident #ty_generics #where_clause {
                 fn serry_write(&self, output: &mut impl ::serry::write::SerryOutput) -> ::serry::write::WriteResult<()> {
                     #write_body
                     Ok(())

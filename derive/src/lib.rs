@@ -1,13 +1,19 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
+use crate::util::{parse_predicate, SynErrorExt};
+use fancy_regex::Regex;
+use proc_macro2::TokenTree::Punct;
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::ToTokens;
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
+use syn::token::Where;
 use syn::{
     parenthesized, parse_macro_input, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput,
-    Error, Expr, ExprLit, Generics, Lit, LitInt, Path, Token, Type, TypePath, WhereClause,
-    WherePredicate,
+    Error, Expr, ExprLit, Generics, Lit, LitInt, MetaList, MetaNameValue, Path, Token, Type,
+    TypeParamBound, TypePath, WhereClause, WherePredicate,
 };
 use syn::{Field, Fields, LitStr, Variant};
 
@@ -142,6 +148,7 @@ struct SerryAttr<'a> {
     discriminant_value: Option<Expr>,
     discriminant_type: Option<Type>,
     field_order: Option<FieldOrder>,
+    bounds: Bounds,
     attr: Option<&'a Attribute>,
 }
 
@@ -228,6 +235,161 @@ enum Extrapolate {
     Function(Path),
 }
 
+type WherePredicates = Punctuated<WherePredicate, Token![,]>;
+#[derive(Default)]
+struct Bounds {
+    read: Option<WherePredicates>,
+    write: Option<WherePredicates>,
+    sized: Option<WherePredicates>,
+}
+impl Bounds {
+    pub fn parse_list(input: ParseStream) -> syn::Result<Self> {
+        let list: Punctuated<MetaNameValue, Token![,]> = Punctuated::parse_terminated(input)?;
+
+        let mut read = None;
+        let mut write = None;
+        let mut sized = None;
+
+        let mut error = None;
+        for pair in list.iter() {
+            macro_rules! match_pair {
+                ($($output:ident($ident:literal)),*) => {
+                    match &pair.path {
+                        $(path if $output.is_none() && path.is_ident($ident) => {
+                            let str: LitStr = match syn::parse2(pair.value.to_token_stream()) {
+                                Ok(value) => value,
+                                Err(e) => {
+                                    error = Some(e.maybe_combined(error));
+                                    continue;
+                                },
+                            };
+                            let predicate = match parse_predicate(&str) {
+                                Ok(value) => value,
+                                Err(e) => {
+                                    error = Some(e.maybe_combined(error));
+                                    continue;
+                                }
+                            };
+                            $output = Some(predicate);
+                        }),*,
+                        path => {
+                            let e = Error::new(
+                                pair.span(),
+                                format!(
+                                    "unknown or duplicate key '{}'",
+                                    path.to_token_stream().to_string()
+                                ),
+                            );
+                            error = Some(e.maybe_combined(error));
+                            continue;
+                        }
+                    }
+                };
+            }
+
+            match_pair!(read("read"), write("write"), sized("sized"));
+        }
+
+        if let Some(error) = error {
+            return Err(error);
+        }
+
+        Ok(Self { read, write, sized })
+    }
+
+    pub fn parse_any(input: ParseStream) -> syn::Result<Self> {
+        // I know the implementation is ugly with regexs and all, but it's better than nothing.
+        // It's a workaround for WherePredicate not allowing keywords, which is kind of annoying.
+        let predicate_str: LitStr = input.parse()?;
+        let predicate_str = predicate_str.value();
+        let regex = Regex::new(r"(?<!\w)_(?!\w)").unwrap();
+
+        let placeholder = util::placeholder_ident();
+        let placeholder_str = placeholder.to_string();
+
+        let predicate_replaced = regex.replace_all(&predicate_str, &placeholder_str);
+        let predicate_str = LitStr::new(&predicate_replaced, predicate_str.span());
+        let predicates: WherePredicates = parse_predicate(&predicate_str)?;
+
+        let mut read: WherePredicates = WherePredicates::new();
+        let mut write: WherePredicates = WherePredicates::new();
+        let mut sized: WherePredicates = WherePredicates::new();
+        for mut pair in predicates.into_pairs() {
+            let predicate = pair.value_mut();
+
+            let placeholder = util::placeholder_ident();
+
+            let read_pred: WherePredicate;
+            let write_pred: WherePredicate;
+            let sized_pred: WherePredicate;
+            match predicate {
+                WherePredicate::Type(ty_predicate) => {
+                    let mut placeholders = Vec::new();
+                    for bound in ty_predicate.bounds.iter_mut() {
+                        match bound {
+                            TypeParamBound::Trait(tr) => {
+                                if tr.path.is_ident(&placeholder) {
+                                    placeholders.push(std::ptr::addr_of_mut!(tr.path));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    macro_rules! set_placeholder {
+                        ($new:expr) => {
+                            unsafe {
+                                let new = $new;
+                                for placeholder in placeholders.iter() {
+                                    **placeholder = new.clone();
+                                }
+                            }
+                        };
+                    }
+                    // This might be A Very Bad Thing To Do. But it should work. Hopefully.
+                    set_placeholder!(util::trait_read_path());
+                    read_pred = predicate.clone();
+                    set_placeholder!(util::trait_write_path());
+                    write_pred = predicate.clone();
+                    set_placeholder!(util::trait_sized_path());
+                    sized_pred = predicate.clone();
+                }
+                _ => {
+                    read_pred = predicate.clone();
+                    write_pred = predicate.clone();
+                    sized_pred = predicate.clone();
+                }
+            }
+
+            read.push_value(read_pred);
+            write.push_value(write_pred);
+            sized.push_value(sized_pred);
+
+            if let Some(comma) = pair.punct() {
+                read.push_punct(comma.clone());
+                write.push_punct(comma.clone());
+                sized.push_punct(comma.clone());
+            }
+        }
+
+        Ok(Self {
+            read: Some(read),
+            write: Some(write),
+            sized: Some(sized),
+        })
+    }
+}
+impl Parse for Bounds {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let lookahead = input.lookahead1();
+
+        if lookahead.peek(Ident::peek_any) {
+            Self::parse_list(input)
+        } else {
+            Self::parse_any(input)
+        }
+    }
+}
+
 impl<'a> ToTokens for SerryAttr<'a> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         self.attr.to_tokens(tokens)
@@ -252,6 +414,7 @@ impl<'a> Default for SerryAttr<'a> {
             discriminant_value: None,
             discriminant_type: None,
             field_order: None,
+            bounds: Bounds::default(),
             attr: None,
         }
     }
@@ -264,6 +427,7 @@ struct SerryAttrFields {
     discriminate_by: bool,
     discriminator: bool,
     field_order: bool,
+    bounds: bool,
 }
 
 impl Default for SerryAttrFields {
@@ -274,6 +438,7 @@ impl Default for SerryAttrFields {
             discriminate_by: false,
             discriminator: false,
             field_order: false,
+            bounds: false,
         }
     }
 }
@@ -283,6 +448,7 @@ impl SerryAttrFields {
         Self {
             version: SerryAttrVersionField::Init,
             field_order: true,
+            bounds: true,
             ..Self::default()
         }
     }
@@ -297,6 +463,7 @@ impl SerryAttrFields {
         Self {
             // TODO: Right now enums don't support versioning in favour of being able to version each variant separately.
             discriminate_by: true,
+            bounds: true,
             ..Self::default()
         }
     }
@@ -323,6 +490,7 @@ fn parse_serry_attr(attr: &Attribute, fields: SerryAttrFields) -> Result<SerryAt
     let mut discriminant_type = None;
     let mut discriminant_value = None;
     let mut field_order = None;
+    let mut bounds = None;
     attr.parse_nested_meta(|meta| match &meta.path {
         path if fields.version != SerryAttrVersionField::None
             && version_range.is_none()
@@ -405,12 +573,21 @@ fn parse_serry_attr(attr: &Attribute, fields: SerryAttrFields) -> Result<SerryAt
 
             Ok(())
         }
-        other => {
-            return Err(meta.error(format_args!(
-                "unexpected attribute '{}'",
-                other.to_token_stream()
-            )));
+        path if fields.bounds && bounds.is_none() && path.is_ident("bound") => {
+            if meta.input.lookahead1().peek(Token![=]) {
+                let value = meta.value()?;
+                bounds = Some(value.parse()?);
+            } else {
+                let parse_buffer;
+                parenthesized!(parse_buffer in meta.input);
+                bounds = Some(parse_buffer.parse()?);
+            }
+            Ok(())
         }
+        other => Err(meta.error(format_args!(
+            "unexpected attribute '{}'",
+            other.to_token_stream()
+        ))),
     })?;
     Ok(SerryAttr {
         version_info,
@@ -419,6 +596,7 @@ fn parse_serry_attr(attr: &Attribute, fields: SerryAttrFields) -> Result<SerryAt
         discriminant_type,
         discriminant_value,
         field_order,
+        bounds: bounds.unwrap_or_default(),
         attr: Some(attr),
     })
 }
@@ -570,12 +748,41 @@ impl FieldName {
     }
 }
 
-fn create_where_clause(required_traits: TokenStream, generics: &Generics) -> Option<WhereClause> {
+fn create_where_clause(
+    bounds: &Option<WherePredicates>,
+    required_traits: impl ToTokens,
+    generics: &Generics,
+) -> Option<WhereClause> {
+    if let Some(bounds) = bounds {
+        combine_where_clause(bounds, generics)
+    } else {
+        generate_where_clause(required_traits.to_token_stream(), generics)
+    }
+}
+fn generate_where_clause(required_traits: TokenStream, generics: &Generics) -> Option<WhereClause> {
     let mut custom_bounds: Vec<WherePredicate> = Vec::new();
 
     for generic in generics.type_params() {
         let name = &generic.ident;
         custom_bounds.push(parse_quote!(#name: #required_traits));
+    }
+
+    let mut clause = generics.where_clause.clone();
+    if custom_bounds.len() < 1 {
+        return clause;
+    }
+    if let Some(clause) = &mut clause {
+        clause.predicates.extend(custom_bounds.into_iter());
+    } else {
+        clause = Some(parse_quote!(where #(#custom_bounds),*));
+    }
+    clause
+}
+fn combine_where_clause(bounds: &WherePredicates, generics: &Generics) -> Option<WhereClause> {
+    let mut custom_bounds: Vec<WherePredicate> = Vec::new();
+
+    for predicate in bounds {
+        custom_bounds.push(predicate.clone());
     }
 
     let mut clause = generics.where_clause.clone();
@@ -596,49 +803,77 @@ mod tests {
     use crate::read::derive_read_impl;
     use crate::sized::derive_sized_impl;
     use crate::write::derive_write_impl;
-    use syn::parse_quote;
+    use syn::{parse_quote, File};
 
     #[test]
     fn derive() {
         let check_validity = |input: TokenStream| {
             let file = syn::parse_file(&input.to_string()).expect("Failed parse");
-            // println!("{}", prettyplease::unparse(&file));
+            println!("{}", prettyplease::unparse(&file));
         };
 
-        let derive_test = |input: DeriveInput| {
+        let derive_test = |content: &str| {
+            let file = syn::parse_file(content).expect("Failed parse");
+            let item = file.items.first().expect("First item required");
+            let input =
+                syn::parse2(item.to_token_stream()).expect("Could not parse file to DeriveInput");
             check_validity(derive_read_impl(&input).expect("Could not derive SerryRead"));
             check_validity(derive_write_impl(&input).expect("Could not derive SerryWrite"));
             check_validity(derive_sized_impl(&input).expect("Could not derive SerrySized"));
         };
 
-        derive_test(parse_quote!(
+        derive_test(
+            "
             #[derive(SerryRead, SerryWrite, SerrySized)]
             enum StringDiscriminated {
                 VariantOne,
                 VariantTwo,
             }
-        ));
-        derive_test(parse_quote!(
+        ",
+        );
+        derive_test(
+            "
             #[derive(SerryRead, SerryWrite, SerrySized)]
             #[serry(repr(&'static str))]
             enum StringDiscriminated {
                 VariantOne,
                 VariantTwo,
             }
-        ));
-        derive_test(parse_quote!(
+        ",
+        );
+        derive_test(
+            "
             #[derive(SerryRead, SerryWrite, SerrySized)]
             #[serry(repr(u16))]
             enum IntDiscriminated {
                 VariantOne,
                 VariantTwo,
             }
-        ));
-        derive_test(parse_quote!(
+        ",
+        );
+        derive_test(
+            "
             #[derive(SerryTraits)]
             struct ThingWithTypeParams<K, V: ?Sized> {
                 map: HashMap<K, V>,
             }
-        ))
+        ",
+        );
+        derive_test(
+            "
+            #[derive(SerryTraits)]
+            #[serry(bound(\"T: _, T::Id: _\"))]
+            struct IdMap<T>
+            where
+                T: IdTrait,
+            {
+                inner: HashMap<T::Id, T>,
+            }
+            trait IdTrait {
+                type Id: Hash + Eq;
+                fn id(&self) -> &Self::Id;
+            }
+        ",
+        );
     }
 }

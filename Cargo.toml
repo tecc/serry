@@ -35,16 +35,20 @@ checksum-sha2 = ["checksum", "dep:sha2"]
 derive = ["dep:serry-derive"]
 
 [[example]]
+name = "checksums"
+required-features = ["derive", "checksum", "checksum-sha2"]
+
+[[example]]
+name = "derive-custom-bounds"
+required-features = ["derive"]
+
+[[example]]
 name = "derive-enum-repr"
 required-features = ["derive"]
 
 [[example]]
 name = "derive-versioned"
 required-features = ["derive"]
-
-[[example]]
-name = "checksums"
-required-features = ["derive", "checksum", "checksum-sha2"]
 
 [dev-dependencies]
 rand = "0.8.5"

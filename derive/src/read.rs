@@ -2,7 +2,11 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
 use syn::{parse_quote, spanned::Spanned, Data, DeriveInput, Error, Expr, Field, Fields, Path};
 
-use crate::{enumerate_variants, find_and_parse_serry_attr, find_and_parse_serry_attr_auto, process_fields, util, Extrapolate, FieldName, FieldOrder, SerryAttr, SerryAttrFields, create_where_clause};
+use crate::{
+    combine_where_clause, create_where_clause, enumerate_variants, find_and_parse_serry_attr,
+    find_and_parse_serry_attr_auto, generate_where_clause, process_fields, util, Extrapolate,
+    FieldName, FieldOrder, SerryAttr, SerryAttrFields,
+};
 
 fn version_ident() -> Ident {
     Ident::new("__version", Span::call_site())
@@ -10,13 +14,14 @@ fn version_ident() -> Ident {
 
 pub fn derive_read_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
     let root_attr = find_and_parse_serry_attr_auto(&input.attrs, &input.data)?;
-    
-    let trait_type = quote!(::serry::read::SerryRead);
+
+    let error_path = util::error_type_path();
+    let trait_path = util::trait_read_path();
 
     let ident = &input.ident;
     let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
 
-    let where_clause = create_where_clause(trait_type.to_token_stream(), &input.generics);
+    let where_clause = create_where_clause(&root_attr.bounds.read, &trait_path, &input.generics);
 
     fn deserialise_fields(
         fields: &Fields,
@@ -255,13 +260,14 @@ pub fn derive_read_impl(input: &DeriveInput) -> Result<TokenStream, Error> {
 
     Ok(quote! {
         const _: () = {
-            use ::serry::SerryError as _Error;
+            use #error_path as _Error;
+            use #trait_path;
 
             #variant_discriminants
 
             #[allow(all)]
             #[automatically_derived]
-            impl #impl_generics #trait_type for #ident #ty_generics #where_clause {
+            impl #impl_generics #trait_path for #ident #ty_generics #where_clause {
                 fn serry_read(input: &mut impl ::serry::read::SerryInput) -> ::serry::read::ReadResult<Self> {
                     #read_body
                 }
